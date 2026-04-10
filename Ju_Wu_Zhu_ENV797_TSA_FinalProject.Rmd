@@ -1,0 +1,399 @@
+---
+title: "ERCOT Ancillary Services Price Forecast"
+author: "Skyler Ju, Joy Wu, Judy Hua Zhu"
+output: pdf_document
+#always_allow_html: true
+editor_options: 
+  chunk_output_type: inline
+  markdown: 
+    wrap: sentence
+---
+
+## Setting R code chunk options
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE) 
+```
+
+## Loading packages and initializing
+
+```{r package, message=FALSE, warning=FALSE}
+library(lubridate)
+library(ggplot2)
+library(forecast)  
+library(Kendall)
+library(tseries)
+library(outliers)
+library(tidyverse)
+library(smooth)
+library(zoo)
+library(readxl)
+```
+
+## Importing data
+
+The dataset contains ERCOT ancillary services Market Clearing Prices for Capacity (MCPC) from December 2023 through April 2026. The raw data is in long format with one row per delivery date, hour ending, and ancillary service type combination. The five ancillary service types are ECRS, NSPIN, REGDN, REGUP, and RRS.
+
+```{r}
+#Importing raw data
+raw_data <- read.csv("./Data/Raw_data.csv")
+
+#Inspect data
+head(raw_data, 10)
+str(raw_data)
+nobs <- nrow(raw_data)
+summary(raw_data)
+```
+## Wrangling and Processing the Dataset
+
+The goal is to reshape the data so that each row represents a unique delivery date and hour ending, with the five ancillary service types as separate columns containing their MCPC values. We also need to handle DST (Day Light Saving) flag entries where fall-back days have a duplicate 02:00 hour.
+
+### Step 1: Handle DST duplicate hours
+
+Fall-back days (November) have two 02:00 entries per ancillary type, one with DSTFlag = true and one with DSTFlag = false. We average the two to collapse them into a single 02:00 entry per day.
+
+```{r wrangle_dst, message=FALSE, warning=FALSE}
+#Check DST flagged rows
+cat("Number of DST flagged rows:", sum(raw_data$DSTFlag == "true"), "\n")
+raw_data %>% filter(DSTFlag == "true") %>% head(10)
+
+
+#Average MCPC for duplicate DST hours, then drop DSTFlag column
+data_clean <- raw_data %>%
+  mutate(deliveryDate = ymd(deliveryDate)) %>%
+  rename(Date = deliveryDate) %>%
+  group_by(Date, hourEnding, ancillaryType) %>%
+  summarise(MCPC = mean(MCPC, na.rm = TRUE), .groups = "drop")
+
+cat("Rows after DST handling:", nrow(data_clean), "\n")
+cat("Expected (848 days x 24 hours x 5 types):", 
+    n_distinct(data_clean$Date) * 24 * 5, "\n")
+```
+> * We want to flag here that the result prints: "Rows after DST handling: 101745 
+Expected (848 days x 24 hours x 5 types): 101760". The difference is 15, which is 3 missing hours times 5 ancillary types. Those are the three spring-forward days (March 2024, March 2025, March 2026) where the 02:00 hour doesn't exist because the clock jumps from 1:00 AM to 3:00 AM. The above function would already handle this situation, but it can't create rows that don't exist in the raw data. Those missing 02:00 entries will show up as NAs after the pivot step, and the na.approx() function will fill them in by interpolating between the 01:00 and 03:00 values. 
+
+### Step 2: Pivot ancillary service types to columns
+
+```{r wrangle_pivot, message=FALSE, warning=FALSE}
+#Pivot wider so each ancillary type becomes its own MCPC column
+data_wide <- data_clean %>%
+  pivot_wider(names_from = ancillaryType, 
+              values_from = MCPC)
+
+#Inspect the pivoted data
+head(data_wide)
+str(data_wide)
+
+#Check for NAs after pivot (missing hours from spring-forward DST)
+cat("\nNAs per column:\n")
+colSums(is.na(data_wide))
+```
+
+### Step 3: Handle missing hours from spring-forward DST
+
+The pivot created rows only for date-hour combinations that exist in the raw data. Spring-forward days (March) are missing the 02:00 hour entirely because clocks jump from 1:00 AM to 3:00 AM, so those rows are absent rather than NA. We need to add them back as explicit rows so the time series has evenly spaced hourly observations, then fill the gaps using interpolation.
+
+```{r wrangle_spring_dst, message=FALSE, warning=FALSE}
+#Create a complete grid of all dates and hours
+full_data <- expand.grid(
+  Date = seq(min(data_wide$Date), max(data_wide$Date), by = "day"),
+  hourEnding = unique(data_wide$hourEnding)
+) %>%
+  arrange(Date, hourEnding)
+
+#Join to fill in missing spring-forward hours as NAs
+data_wide <- full_data %>%
+  left_join(data_wide, by = c("Date", "hourEnding"))
+
+#Check NAs now
+cat("NAs per column:\n")
+colSums(is.na(data_wide))
+
+#Fill spring-forward NAs using interpolation within each date
+data_wide <- data_wide %>%
+  group_by(Date) %>%
+  mutate(across(c(ECRS, NSPIN, REGDN, REGUP, RRS), 
+                ~na.approx(., na.rm = FALSE))) %>%
+  ungroup()
+
+#Verify
+cat("Rows after filling:", nrow(data_wide), "\n")
+cat("Expected (848 x 24):", n_distinct(data_wide$Date) * 24, "\n")
+cat("NAs remaining:", sum(is.na(data_wide %>% select(ECRS:RRS))), "\n")
+```
+
+
+### Step 4: Sort by date and hour
+
+```{r wrangle_sort, message=FALSE, warning=FALSE}
+#Sort chronologically
+data_wide <- data_wide %>%
+  arrange(Date, hourEnding)
+
+head(data_wide, 25)
+tail(data_wide, 25)
+summary(data_wide)
+```
+
+
+
+## Initial Plots
+
+```{r initial_plots, message=FALSE, warning=FALSE}
+#For plotting, create a datetime column combining date and hour
+data_plot <- data_wide %>%
+  mutate(hour_num = as.numeric(substr(hourEnding, 1, 2)),
+         DateTime = Date + hours(hour_num))
+
+#Plot all five ancillary types over time
+#Using daily averages for cleaner visualization
+daily_avg <- data_plot %>%
+  group_by(Date) %>%
+  summarise(across(c(ECRS, NSPIN, REGDN, REGUP, RRS), 
+                   ~mean(., na.rm = TRUE))) %>%
+  pivot_longer(cols = c(ECRS, NSPIN, REGDN, REGUP, RRS),
+               names_to = "Type",
+               values_to = "MCPC")
+
+ggplot(daily_avg, aes(x = Date, y = MCPC, color = Type)) +
+  geom_line(alpha = 0.7) +
+  ylab("Daily Average MCPC ($/MW)") +
+  xlab("Date") +
+  ggtitle("ERCOT Ancillary Services MCPC: All Types") +
+  theme(legend.position = "bottom")
+
+#Individual plots for each ancillary type
+for(type in c("ECRS", "NSPIN", "REGDN", "REGUP", "RRS")) {
+  p <- daily_avg %>%
+    filter(Type == type) %>%
+    ggplot(aes(x = Date, y = MCPC)) +
+    geom_line(color = "blue") +
+    ylab("Daily Average MCPC ($/MW)") +
+    xlab("Date") +
+    ggtitle(paste("ERCOT", type, "MCPC"))
+  print(p)
+}
+```
+
+## Creating Time Series Objects
+
+Since this is hourly data with multiple seasonal components (daily cycle of 24 hours and weekly cycle of 168 hours), we use `msts()`. We create a time series object for each ancillary service type.
+
+```{r ts_objects, message=FALSE, warning=FALSE}
+#Create msts objects for each ancillary type
+#Seasonal periods: 24 (daily), 168 (weekly = 24*7)
+ts_ECRS <- msts(data_wide$ECRS,
+                seasonal.periods = c(24, 168),
+                start = c(2023, 347, 1))
+                #day 347 = Dec 13
+
+ts_NSPIN <- msts(data_wide$NSPIN,
+                 seasonal.periods = c(24, 168),
+                 start = c(2023, 347, 1))
+
+ts_REGDN <- msts(data_wide$REGDN,
+                 seasonal.periods = c(24, 168),
+                 start = c(2023, 347, 1))
+
+ts_REGUP <- msts(data_wide$REGUP,
+                 seasonal.periods = c(24, 168),
+                 start = c(2023, 347, 1))
+
+ts_RRS <- msts(data_wide$RRS,
+               seasonal.periods = c(24, 168),
+               start = c(2023, 347, 1))
+
+cat("Length of each ts object:", length(ts_ECRS), "hourly observations\n")
+cat("Expected:", nrow(data_wide), "\n")
+```
+
+## Decomposing the Time Series
+
+Using `mstl()` to decompose the multi-seasonal time series and inspect the daily and weekly seasonal components. Starting with ECRS as an example.
+
+```{r decompose, message=FALSE, warning=FALSE}
+#Decompose ECRS
+ts_ECRS %>% mstl() %>%
+  autoplot() +
+  ggtitle("Decomposition of ECRS MCPC")
+
+#Decompose RRS
+ts_RRS %>% mstl() %>%
+  autoplot() +
+  ggtitle("Decomposition of RRS MCPC")
+
+#Decompose REGUP
+ts_REGUP %>% mstl() %>%
+  autoplot() +
+  ggtitle("Decomposition of REGUP MCPC")
+
+#Decompose REGDN
+ts_REGDN %>% mstl() %>%
+  autoplot() +
+  ggtitle("Decomposition of REGDN MCPC")
+
+#Decompose RRS
+ts_RRS %>% mstl() %>%
+  autoplot() +
+  ggtitle("Decomposition of RRS MCPC")
+```
+
+## ACF and PACF
+
+```{r acf_pacf, message=FALSE, warning=FALSE}
+#ACF and PACF for ECRS
+par(mfrow=c(1,2))
+Acf(data_wide$ECRS, lag.max = 168, 
+    main = "ACF - ECRS MCPC")
+Pacf(data_wide$ECRS, lag.max = 168, 
+     main = "PACF - ECRS MCPC")
+par(mfrow=c(1,1))
+
+#ACF and PACF for RRS
+par(mfrow=c(1,2))
+Acf(data_wide$RRS, lag.max = 168, 
+    main = "ACF - RRS MCPC")
+Pacf(data_wide$RRS, lag.max = 168, 
+     main = "PACF - RRS MCPC")
+par(mfrow=c(1,1))
+
+#ACF and PACF for REGUP
+par(mfrow=c(1,2))
+Acf(data_wide$REGUP, lag.max = 168, 
+    main = "ACF - REGUP MCPC")
+Pacf(data_wide$REGUP, lag.max = 168, 
+     main = "PACF - REGUP MCPC")
+par(mfrow=c(1,1))
+
+#ACF and PACF for REGDN
+par(mfrow=c(1,2))
+Acf(data_wide$REGDN, lag.max = 168, 
+    main = "ACF - REGDN MCPC")
+Pacf(data_wide$REGUP, lag.max = 168, 
+     main = "PACF - REGDN MCPC")
+par(mfrow=c(1,1))
+
+#ACF and PACF for RRS
+par(mfrow=c(1,2))
+Acf(data_wide$RRS, lag.max = 168, 
+    main = "ACF - RRS MCPC")
+Pacf(data_wide$REGUP, lag.max = 168, 
+     main = "PACF - RRS MCPC")
+par(mfrow=c(1,1))
+```
+
+## Setting Up Training and Test Sets
+
+Training period: start of dataset (December 13, 2023) through December 31, 2025. Test period: January 1, 2026 through the end of the dataset (April 8, 2026).
+
+```{r train_test_split, message=FALSE, warning=FALSE}
+#Count hours in training period (Dec 2023 - Dec 2025)
+n_train <- sum(data_wide$Date <= as.Date("2025-12-31"))
+
+#Count hours in test period (Jan 2026 - Apr 2026)
+n_test <- sum(data_wide$Date >= as.Date("2026-01-01"))
+
+cat("Training observations (hours):", n_train, "\n")
+cat("Test observations (hours):", n_test, "\n")
+cat("Training days:", n_train / 24, "\n")
+cat("Test days:", n_test / 24, "\n")
+
+#Create training and test subsets for each ancillary type
+#ECRS
+ts_ECRS_train <- subset(ts_ECRS, end = n_train)
+ts_ECRS_test  <- subset(ts_ECRS, start = n_train + 1)
+
+#NSPIN
+ts_NSPIN_train <- subset(ts_NSPIN, end = n_train)
+ts_NSPIN_test  <- subset(ts_NSPIN, start = n_train + 1)
+
+#REGDN
+ts_REGDN_train <- subset(ts_REGDN, end = n_train)
+ts_REGDN_test  <- subset(ts_REGDN, start = n_train + 1)
+
+#REGUP
+ts_REGUP_train <- subset(ts_REGUP, end = n_train)
+ts_REGUP_test  <- subset(ts_REGUP, start = n_train + 1)
+
+#RRS
+ts_RRS_train <- subset(ts_RRS, end = n_train)
+ts_RRS_test  <- subset(ts_RRS, start = n_train + 1)
+
+#Verify lengths
+cat("\nVerification:\n")
+cat("ECRS train:", length(ts_ECRS_train), 
+    "test:", length(ts_ECRS_test), 
+    "total:", length(ts_ECRS_train) + length(ts_ECRS_test), "\n")
+
+#Plot train and test (horizontal axis has cumulative units)
+autoplot(ts_ECRS_train) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("ECRS Training Data: Dec 2023 - Dec 2025")
+
+autoplot(ts_ECRS_test) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("ECRS Test Data: Jan 2026 - Apr 2026")
+
+autoplot(ts_NSPIN_train) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("NSPIN Training Data: Dec 2023 - Dec 2025")
+
+autoplot(ts_NSPIN_test) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("NSPIN Test Data: Jan 2026 - Apr 2026")
+
+autoplot(ts_REGDN_train) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("REGDN Training Data: Dec 2023 - Dec 2025")
+
+autoplot(ts_REGDN_test) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("REGDN Test Data: Jan 2026 - Apr 2026")
+
+autoplot(ts_REGUP_train) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("REGUP Training Data: Dec 2023 - Dec 2025")
+
+autoplot(ts_REGUP_test) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("REGUP Test Data: Jan 2026 - Apr 2026")
+
+autoplot(ts_RRS_train) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("RRS Training Data: Dec 2023 - Dec 2025")
+
+autoplot(ts_RRS_test) +
+  ylab("MCPC ($/MW)") +
+  ggtitle("RRS Test Data: Jan 2026 - Apr 2026")
+
+
+
+
+#Plot train and test using data frame with actual dates
+data_plot <- data_wide %>%
+  mutate(hour_num = as.numeric(substr(hourEnding, 1, 2)),
+         DateTime = Date + hours(hour_num),
+         Period = ifelse(Date <= as.Date("2025-12-31"), 
+                         "Train", "Test"))
+
+ggplot(data_plot, aes(x = DateTime, y = ECRS, color = Period)) +
+  geom_line(alpha = 0.5) +
+  ylab("MCPC ($/MW)") +
+  xlab("Date") +
+  ggtitle("ECRS MCPC: Training vs Test Period") +
+  scale_x_datetime(date_breaks = "3 months", date_labels = "%b %Y") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+for(type in c("ECRS", "NSPIN", "REGDN", "REGUP", "RRS")) {
+  p <- ggplot(data_plot, aes(x = DateTime, y = .data[[type]], color = Period)) +
+    geom_line(alpha = 0.5) +
+    ylab("MCPC ($/MW)") +
+    xlab("Date") +
+    ggtitle(paste(type, "MCPC: Training vs Test Period")) +
+    scale_x_datetime(date_breaks = "3 months", date_labels = "%b %Y") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(p)
+}
+
+```
+
