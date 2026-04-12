@@ -1,0 +1,211 @@
+## Setting R code chunk options
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE) 
+```
+
+## Loading packages and initializing
+
+```{r package, message=FALSE, warning=FALSE}
+library(lubridate)
+library(ggplot2)
+library(forecast)  
+library(Kendall)
+library(tseries)
+library(outliers)
+library(tidyverse)
+library(smooth)
+library(zoo)
+library(readxl)
+```
+
+## Importing data
+
+The dataset contains ERCOT ancillary services Market Clearing Prices for Capacity (MCPC) from December 2023 through April 2026. The raw data is in long format with one row per delivery date, hour ending, and ancillary service type combination. The five ancillary service types are ECRS, NSPIN, REGDN, REGUP, and RRS.
+
+```{r}
+#Importing raw data
+raw_data <- read.csv("./Data/Raw_data.csv")
+
+#Inspect data
+head(raw_data, 10)
+str(raw_data)
+nobs <- nrow(raw_data)
+summary(raw_data)
+```
+## Wrangling and Processing the Dataset
+
+The goal is to reshape the data so that each row represents a unique delivery date and hour ending, with the five ancillary service types as separate columns containing their MCPC values. We also need to handle DST (Day Light Saving) flag entries where fall-back days have a duplicate 02:00 hour.
+
+### Step 1: Handle DST duplicate hours
+
+Fall-back days (November) have two 02:00 entries per ancillary type, one with DSTFlag = true and one with DSTFlag = false. We average the two to collapse them into a single 02:00 entry per day.
+
+```{r wrangle_dst, message=FALSE, warning=FALSE}
+#Check DST flagged rows
+cat("Number of DST flagged rows:", sum(raw_data$DSTFlag == "true"), "\n")
+raw_data %>% filter(DSTFlag == "true") %>% head(10)
+
+
+#Average MCPC for duplicate DST hours, then drop DSTFlag column
+data_clean <- raw_data %>%
+  mutate(deliveryDate = ymd(deliveryDate)) %>%
+  rename(Date = deliveryDate) %>%
+  group_by(Date, hourEnding, ancillaryType) %>%
+  summarise(MCPC = mean(MCPC, na.rm = TRUE), .groups = "drop")
+
+cat("Rows after DST handling:", nrow(data_clean), "\n")
+cat("Expected (848 days x 24 hours x 5 types):", 
+    n_distinct(data_clean$Date) * 24 * 5, "\n")
+```
+> * We want to flag here that the result prints: "Rows after DST handling: 101745 
+Expected (848 days x 24 hours x 5 types): 101760". The difference is 15, which is 3 missing hours times 5 ancillary types. Those are the three spring-forward days (March 2024, March 2025, March 2026) where the 02:00 hour doesn't exist because the clock jumps from 1:00 AM to 3:00 AM. The above function would already handle this situation, but it can't create rows that don't exist in the raw data. Those missing 02:00 entries will show up as NAs after the pivot step, and the na.approx() function will fill them in by interpolating between the 01:00 and 03:00 values. 
+
+### Step 2: Pivot ancillary service types to columns
+
+```{r wrangle_pivot, message=FALSE, warning=FALSE}
+#Pivot wider so each ancillary type becomes its own MCPC column
+data_wide <- data_clean %>%
+  pivot_wider(names_from = ancillaryType, 
+              values_from = MCPC)
+
+#Inspect the pivoted data
+head(data_wide)
+str(data_wide)
+
+#Check for NAs after pivot (missing hours from spring-forward DST)
+cat("\nNAs per column:\n")
+colSums(is.na(data_wide))
+```
+
+### Step 3: Handle missing hours from spring-forward DST
+
+The pivot created rows only for date-hour combinations that exist in the raw data. Spring-forward days (March) are missing the 02:00 hour entirely because clocks jump from 1:00 AM to 3:00 AM, so those rows are absent rather than NA. We need to add them back as explicit rows so the time series has evenly spaced hourly observations, then fill the gaps using interpolation.
+
+```{r wrangle_spring_dst, message=FALSE, warning=FALSE}
+#Create a complete grid of all dates and hours
+full_data <- expand.grid(
+  Date = seq(min(data_wide$Date), max(data_wide$Date), by = "day"),
+  hourEnding = unique(data_wide$hourEnding)
+) %>%
+  arrange(Date, hourEnding)
+
+#Join to fill in missing spring-forward hours as NAs
+data_wide <- full_data %>%
+  left_join(data_wide, by = c("Date", "hourEnding"))
+
+#Check NAs now
+cat("NAs per column:\n")
+colSums(is.na(data_wide))
+
+#Fill spring-forward NAs using interpolation within each date
+data_wide <- data_wide %>%
+  group_by(Date) %>%
+  mutate(across(c(ECRS, NSPIN, REGDN, REGUP, RRS), 
+                ~na.approx(., na.rm = FALSE))) %>%
+  ungroup()
+
+#Verify
+cat("Rows after filling:", nrow(data_wide), "\n")
+cat("Expected (848 x 24):", n_distinct(data_wide$Date) * 24, "\n")
+cat("NAs remaining:", sum(is.na(data_wide %>% select(ECRS:RRS))), "\n")
+```
+
+
+### Step 4: Sort by date and hour
+
+```{r wrangle_sort, message=FALSE, warning=FALSE}
+#Sort chronologically
+data_wide <- data_wide %>%
+  arrange(Date, hourEnding)
+
+head(data_wide, 25)
+tail(data_wide, 25)
+summary(data_wide)
+```
+
+
+
+## Splitting into Training and Test Datasets
+
+#Training period: Dec 13, 2023 through Dec 31, 2025
+#Test period: Jan 1, 2026 through Apr 8, 2026
+```{r}
+train_data <- data_wide %>%
+  filter(Date <= as.Date("2025-12-31"))
+
+test_data <- data_wide %>%
+  filter(Date >= as.Date("2026-01-01"))
+
+cat("Training rows:", nrow(train_data), 
+    "(", n_distinct(train_data$Date), "days )\n")
+cat("Test rows:", nrow(test_data), 
+    "(", n_distinct(test_data$Date), "days )\n")
+
+#Export both to Data folder
+write.csv(train_data, "./Data/train_period_clean/data_train.csv", row.names = FALSE)
+write.csv(test_data, "./Data/test_period_clean/data_test.csv", row.names = FALSE)
+```
+
+
+## Creating Training Period Time Series Objects
+
+#Create msts objects from training data for each ancillary type
+#Seasonal periods: 24 (daily), 168 (weekly)
+```{r}
+start_date <- decimal_date(ymd("2023-12-13"))
+
+ts_RRS_train <- msts(train_data$RRS,
+                     seasonal.periods = c(24, 168),
+                     start = start_date)
+
+cat("Training ts length:", length(ts_RRS_train), "hourly observations\n")
+
+```
+
+
+## Decomposing the Training Time Series
+
+#Decompose to inspect daily (24-hour) and weekly (168-hour) seasonal components
+```{r decompose, message=FALSE, warning=FALSE, fig.width=12, fig.height=8}
+
+#Decompose and extract components
+decomp_RRS <- mstl(ts_RRS_train)
+
+#Build a data frame with actual dates for plotting
+decomp_df <- data.frame(
+  DateTime = train_data$Date + hours(as.numeric(substr(train_data$hourEnding, 1, 2))),
+  Data = as.numeric(decomp_RRS[, "Data"]),
+  Trend = as.numeric(decomp_RRS[, "Trend"]),
+  Seasonal24 = as.numeric(decomp_RRS[, "Seasonal24"]),
+  Seasonal168 = as.numeric(decomp_RRS[, "Seasonal168"]),
+  Remainder = as.numeric(decomp_RRS[, "Remainder"])
+) %>%
+  pivot_longer(cols = -DateTime, 
+               names_to = "Component", 
+               values_to = "Value") %>%
+  mutate(Component = factor(Component, 
+                            levels = c("Data", "Trend", "Seasonal24", 
+                                       "Seasonal168", "Remainder")))
+
+ggplot(decomp_df, aes(x = DateTime, y = Value)) +
+  geom_line() +
+  facet_wrap(~Component, ncol = 1, scales = "free_y") +
+  xlab("Date") +
+  ylab("") +
+  ggtitle("Decomposition of RRS MCPC (Training Period)") +
+  scale_x_datetime(date_breaks = "3 months", date_labels = "%b %Y") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+> Analysis: The series is dominated by large price spikes, especially in early 2024 where hourly RRS prices hit almost $1,500/MW. By 2025, spikes become much less frequent and the overall price level drops in the trend component. The daily seasonal pattern (Seasonal24) is strongest during summer months when AC-driven demand peaks in afternoon and evening hours. The weekly pattern (Seasonal168) shows lower weekend prices, which is expected since commercial demand drops. The remainder is large relative to the other components, meaning extreme scarcity events drive much of the price variation and will be difficult to forecast.
+
+## ACF and PACF on Training Period
+```{r acf_pacf, message=FALSE, warning=FALSE, fig.width=14, fig.height=6}
+#RRS
+par(mfrow=c(1,2))
+Acf(train_data$RRS, lag.max = 168, main = "ACF - RRS (Train)")
+Pacf(train_data$RRS, lag.max = 168, main = "PACF - RRS (Train)")
+par(mfrow=c(1,1))
+```
+> Analysis: The ACF decays slowly across all 168 lags, indicating non-stationarity and the need for differencing. Clear spikes appear at lag 24 (daily cycle) and around lag 168 (weekly cycle). The PACF has a strong spike at lag 1 followed by a sharp drop, suggesting an AR(1) component, with smaller significant spikes at lags 24 and 168 confirming both seasonal cycles. This pattern points toward an ARIMA model with Fourier terms at the daily and weekly frequencies as a good modeling approach.
