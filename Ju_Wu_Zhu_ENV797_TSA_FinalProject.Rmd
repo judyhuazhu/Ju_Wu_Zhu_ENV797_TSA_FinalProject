@@ -364,10 +364,7 @@ autoplot(ts_RRS_train) +
 
 autoplot(ts_RRS_test) +
   ylab("MCPC ($/MW)") +
-  ggtitle("RRS Test Data: Jan 2026 - Apr 2026")
-
-
-
+  ggtitle("RRS Test Data: Jan 2026 - Apr 2026")                             
 
 #Plot train and test using data frame with actual dates
 data_plot <- data_wide %>%
@@ -446,6 +443,7 @@ ARIMA_autofit_RRS <- tryCatch(
 print(ARIMA_autofit_RRS)
 
 ```
+
 ```{r}
 # ARIMA + Fourier + XREG Model
 
