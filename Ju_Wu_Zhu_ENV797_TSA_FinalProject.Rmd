@@ -396,4 +396,203 @@ for(type in c("ECRS", "NSPIN", "REGDN", "REGUP", "RRS")) {
 }
 
 ```
+## Models
+```{r}
+#ARIMA Model
+#seasonal=FALSE: msts does not support multi-period seasonal ARIMA
+#lambda=0: log transform to stabilize heavy-tailed price spikes
+#stepwise=TRUE, approximation=TRUE: required for hourly series of this length
+#ECRS
+ARIMA_autofit_ECRS <- auto.arima(ts_ECRS_train, seasonal = FALSE,
+                                 lambda = 0, stepwise = TRUE,
+                                 approximation = TRUE)
+print(ARIMA_autofit_ECRS)
+
+#NSPIN
+ARIMA_autofit_NSPIN <- auto.arima(ts_NSPIN_train, seasonal = FALSE,
+                                  lambda = 0, stepwise = TRUE,
+                                  approximation = TRUE)
+print(ARIMA_autofit_NSPIN)
+
+#REGDN
+ARIMA_autofit_REGDN <- tryCatch(
+  auto.arima(ts_REGDN_train, seasonal = FALSE,
+             lambda = 0, stepwise = TRUE,
+             approximation = TRUE),
+  error = function(e)
+    auto.arima(ts_REGDN_train, seasonal = FALSE,
+               stepwise = TRUE, approximation = TRUE)
+)
+print(ARIMA_autofit_REGDN)
+
+#REGUP
+ARIMA_autofit_REGUP <- tryCatch(
+  auto.arima(ts_REGUP_train, seasonal = FALSE,
+             lambda = 0, stepwise = TRUE, approximation = TRUE),
+  error = function(e)
+    auto.arima(ts_REGUP_train, seasonal = FALSE,
+               stepwise = TRUE, approximation = TRUE)
+)
+print(ARIMA_autofit_REGUP)
+
+#RRS
+ARIMA_autofit_RRS <- tryCatch(
+  auto.arima(ts_RRS_train, seasonal = FALSE,
+             lambda = 0, stepwise = TRUE, approximation = TRUE),
+  error = function(e)
+    auto.arima(ts_RRS_train, seasonal = FALSE,
+               stepwise = TRUE, approximation = TRUE)
+)
+print(ARIMA_autofit_RRS)
+
+```
+```{r}
+# ARIMA + Fourier + XREG Model
+
+#Build xreg matrix: day-of-week dummies only
+#Hour-of-day effect captured by Fourier terms
+train_xreg <- model.matrix(
+  ~ factor(lubridate::wday(Date, week_start = 1)),
+  data = data_wide %>% filter(Date <= as.Date("2025-12-31")))[, -1]
+
+#Select K by AICc on training data using parallel computing
+#Max allowed K = m/2 = c(12, 84) for periods c(24, 168)
+#Using nested structure: try c(6,6) first, then expand if needed
+library(parallel)
+
+# K selection: start with c(6,6) as default, only expand if clearly beneficial
+K_list <- list(c(2,2), c(6,6), c(12,12))
+
+#ECRS
+cat("Fitting ECRS with Fourier+xreg...\n")
+best_aicc_ECRS <- Inf
+best_K_ECRS <- NULL
+for(i in 1:3) {
+  cat("  Trying K =", paste(K_list[[i]], collapse=","), "...\n")
+  tryCatch({
+    fit_temp <- auto.arima(ts_ECRS_train, seasonal = FALSE, lambda = 0,
+                           xreg = cbind(fourier(ts_ECRS_train, K = K_list[[i]]), train_xreg),
+                           stepwise = TRUE, approximation = TRUE)
+    cat("    AICc:", round(fit_temp$aicc, 2), "\n")
+    if(fit_temp$aicc < best_aicc_ECRS) {
+      best_aicc_ECRS <- fit_temp$aicc
+      best_K_ECRS <- K_list[[i]]
+    }
+  }, error = function(e) {cat("    Error occurred\n")})
+}
+print(best_K_ECRS)
+
+#NSPIN
+cat("Fitting NSPIN with Fourier+xreg...\n")
+best_aicc_NSPIN <- Inf
+best_K_NSPIN <- NULL
+for(i in 1:3) {
+  cat("  Trying K =", paste(K_list[[i]], collapse=","), "...\n")
+  tryCatch({
+    fit_temp <- auto.arima(ts_NSPIN_train, seasonal = FALSE, lambda = 0,
+                           xreg = cbind(fourier(ts_NSPIN_train, K = K_list[[i]]), train_xreg),
+                           stepwise = TRUE, approximation = TRUE)
+    cat("    AICc:", round(fit_temp$aicc, 2), "\n")
+    if(fit_temp$aicc < best_aicc_NSPIN) {
+      best_aicc_NSPIN <- fit_temp$aicc
+      best_K_NSPIN <- K_list[[i]]
+    }
+  }, error = function(e) {cat("    Error occurred\n")})
+}
+print(best_K_NSPIN)
+
+#REGDN
+cat("Fitting REGDN with Fourier+xreg...\n")
+best_aicc_REGDN <- Inf
+best_K_REGDN <- NULL
+for(i in 1:3) {
+  cat("  Trying K =", paste(K_list[[i]], collapse=","), "...\n")
+  tryCatch({
+    fit_temp <- auto.arima(ts_REGDN_train, seasonal = FALSE, lambda = 0,
+                           xreg = cbind(fourier(ts_REGDN_train, K = K_list[[i]]), train_xreg),
+                           stepwise = TRUE, approximation = TRUE)
+    cat("    AICc:", round(fit_temp$aicc, 2), "\n")
+    if(fit_temp$aicc < best_aicc_REGDN) {
+      best_aicc_REGDN <- fit_temp$aicc
+      best_K_REGDN <- K_list[[i]]
+    }
+  }, error = function(e) {cat("    Error occurred\n")})
+}
+print(best_K_REGDN)
+
+#REGUP
+cat("Fitting REGUP with Fourier+xreg...\n")
+best_aicc_REGUP <- Inf
+best_K_REGUP <- NULL
+for(i in 1:3) {
+  cat("  Trying K =", paste(K_list[[i]], collapse=","), "...\n")
+  tryCatch({
+    fit_temp <- auto.arima(ts_REGUP_train, seasonal = FALSE, lambda = 0,
+                           xreg = cbind(fourier(ts_REGUP_train, K = K_list[[i]]), train_xreg),
+                           stepwise = TRUE, approximation = TRUE)
+    cat("    AICc:", round(fit_temp$aicc, 2), "\n")
+    if(fit_temp$aicc < best_aicc_REGUP) {
+      best_aicc_REGUP <- fit_temp$aicc
+      best_K_REGUP <- K_list[[i]]
+    }
+  }, error = function(e) {cat("    Error occurred\n")})
+}
+print(best_K_REGUP)
+
+#RRS
+cat("Fitting RRS with Fourier+xreg...\n")
+best_aicc_RRS <- Inf
+best_K_RRS <- NULL
+for(i in 1:3) {
+  cat("  Trying K =", paste(K_list[[i]], collapse=","), "...\n")
+  tryCatch({
+    fit_temp <- auto.arima(ts_RRS_train, seasonal = FALSE, lambda = 0,
+                           xreg = cbind(fourier(ts_RRS_train, K = K_list[[i]]), train_xreg),
+                           stepwise = TRUE, approximation = TRUE)
+    cat("    AICc:", round(fit_temp$aicc, 2), "\n")
+    if(fit_temp$aicc < best_aicc_RRS) {
+      best_aicc_RRS <- fit_temp$aicc
+      best_K_RRS <- K_list[[i]]
+    }
+  }, error = function(e) {cat("    Error occurred\n")})
+}
+print(best_K_RRS)
+
+#Fit final models with best K
+ARIMA_Four_autofit_ECRS <- auto.arima(ts_ECRS_train, seasonal = FALSE, lambda = 0,
+                                      xreg = cbind(fourier(ts_ECRS_train, K = best_K_ECRS),
+                                                   train_xreg),
+                                      stepwise = TRUE, approximation = TRUE)
+print(ARIMA_Four_autofit_ECRS)
+
+ARIMA_Four_autofit_NSPIN <- auto.arima(ts_NSPIN_train, seasonal = FALSE, lambda = 0,
+                                       xreg = cbind(fourier(ts_NSPIN_train, K = best_K_NSPIN),
+                                                    train_xreg),
+                                       stepwise = TRUE, approximation = TRUE)
+print(ARIMA_Four_autofit_NSPIN)
+
+ARIMA_Four_autofit_REGDN <- auto.arima(ts_REGDN_train, seasonal = FALSE, lambda = 0,
+                                       xreg = cbind(fourier(ts_REGDN_train, K = best_K_REGDN),
+                                                    train_xreg),
+                                       stepwise = TRUE, approximation = TRUE)
+print(ARIMA_Four_autofit_REGDN)
+
+ARIMA_Four_autofit_REGUP <- auto.arima(ts_REGUP_train, seasonal = FALSE, lambda = 0,
+                                       xreg = cbind(fourier(ts_REGUP_train, K = best_K_REGUP),
+                                                    train_xreg),
+                                       stepwise = TRUE, approximation = TRUE)
+print(ARIMA_Four_autofit_REGUP)
+
+ARIMA_Four_autofit_RRS <- auto.arima(ts_RRS_train, seasonal = FALSE, lambda = 0,
+                                     xreg = cbind(fourier(ts_RRS_train, K = best_K_RRS),
+                                                  train_xreg),
+                                     stepwise = TRUE, approximation = TRUE)
+print(ARIMA_Four_autofit_RRS)
+
+
+#Build xreg matrix for test data (needed for forecasting)
+test_xreg <- model.matrix(
+  ~ factor(lubridate::wday(Date, week_start = 1)),
+  data = data_wide %>% filter(Date > as.Date("2025-12-31")))[, -1]
+```
 
