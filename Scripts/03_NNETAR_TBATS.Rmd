@@ -4,7 +4,7 @@ Neural network model (NNETAR) to capture non-linear trends and forecast price pi
 ```{r}
 library(forecast)
 RRS_ts <- ts(data_wide$RRS,frequency = 24)
-# Train/Test saperate 
+# Train/Test separate 
 n_train <- 18000
 n_test <- 2352
 ts_RRS_train <- subset(RRS_ts, end = n_train)
@@ -25,10 +25,10 @@ plot(RRS_nnetar_fc)
 accuracy(RRS_nnetar_fc, ts_RRS_test)
 ```
 
-The auto model generates m = 24, p (nonseasonal lag) = 28, and P (seasonal lag) = 1, size = 14. This size (number of layers in this network) is unnecessarily high for a simple model, which can be futhur tuned if chosen.
+The auto model generates m = 24, p (nonseasonal lag) = 28, and P (seasonal lag) = 1, size = 14. This size (number of layers in this network) is unnecessarily high for a simple model, which can be furthur tuned if chosen.
 
 # TABATS
-For TABATS, we are using multi-seasonal time series.
+For TABATS, we are using multiseasonal time series.
 ```{r}
 mtts_RRS <- msts(
   data_wide$RRS,
