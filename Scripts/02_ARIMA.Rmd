@@ -22,7 +22,7 @@ library(tidyverse)
 
 ```{r load_data, message=FALSE, warning=FALSE}
 #Load processed training data exported from data exploration
-train_data <- read.csv("../Data/train_period_clean/data_train.csv")
+train_data <- read.csv("./Data/train_period_clean/data_train.csv")
 
 cat("Training rows:", nrow(train_data),
     "(", n_distinct(train_data$Date), "days )\n")
