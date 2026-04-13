@@ -22,15 +22,13 @@ library(tidyverse)
 
 ```{r load_data, message=FALSE, warning=FALSE}
 #Load processed training data exported from data exploration
-train_data <- read.csv("./Data/train_period_clean/data_train.csv")
+train_data <- read.csv("../Data/train_period_clean/data_train.csv")
 
 cat("Training rows:", nrow(train_data),
     "(", n_distinct(train_data$Date), "days )\n")
 ```
 
 ## Creating Training Period Time Series Object
-
-We use `ts()` with `frequency = 24` to represent the daily seasonal period (24 hourly observations per day).
 
 ```{r ts_object}
 ts_RRS_arima <- ts(train_data$RRS,
@@ -42,7 +40,7 @@ cat("Training ts length:", length(ts_RRS_arima), "hourly observations\n")
 
 ## ARIMA Modeling of RRS MCPC
 
-We fit a manual ARIMA model to the RRS training series. Parameters are selected from the ACF and PACF plots in the data exploration file without using `auto.arima()`.
+We fit a manual ARIMA model to the RRS training series. 
 
 ### Step 1: ACF and PACF on the Differenced Series
 
@@ -113,3 +111,24 @@ print(lb_test_fourier)
 ```
 > Analysis: The Ljung-Box test still strongly rejects white noise (p < 2.2e-16), and the residual ACF shows a spike at lag 24 that remains comparable in magnitude to the base ARIMA(1,1,1), indicating that the Fourier terms with k = 6 have not meaningfully reduced the residual daily seasonal structure. The improvement is reflected in the AIC, which drops from 159532.4 to 159218.3, showing better overall fit, but the persistent lag 24 spike suggests that the daily seasonal pattern in this data is too irregular to be well captured by fixed Fourier. The large price spikes and right-skewed histogram are consistent with the base model.
 
+
+## Accuracy on Test Period
+```{r}
+#Load test data
+test_data <- read.csv("./Data/test_period_clean/data_test.csv")
+n_test <- nrow(test_data)
+
+#ARIMA(1,1,1) forecast and accuracy
+forecast_arima <- forecast(ARIMA_RRS, h = n_test)
+accuracy(forecast_arima, test_data$RRS)
+
+```
+
+```{r}
+#ARIMA + Fourier forecast and accuracy
+fourier_test <- fourier(ts_RRS_arima, K = 6, h = n_test)
+forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg = fourier_test, h = n_test)
+accuracy(forecast_fourier, test_data$RRS)
+
+
+```
