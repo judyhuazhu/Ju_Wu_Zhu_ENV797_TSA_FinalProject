@@ -1,0 +1,115 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+## Setting R code chunk options
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE) 
+```
+
+## Loading packages and initializing
+
+```{r package, message=FALSE, warning=FALSE}
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+```
+
+## Loading the Processed Training Data
+
+```{r load_data, message=FALSE, warning=FALSE}
+#Load processed training data exported from data exploration
+train_data <- read.csv("./Data/train_period_clean/data_train.csv")
+
+cat("Training rows:", nrow(train_data),
+    "(", n_distinct(train_data$Date), "days )\n")
+```
+
+## Creating Training Period Time Series Object
+
+We use `ts()` with `frequency = 24` to represent the daily seasonal period (24 hourly observations per day).
+
+```{r ts_object}
+ts_RRS_arima <- ts(train_data$RRS,
+                   frequency = 24,
+                   start = c(1, 1))
+
+cat("Training ts length:", length(ts_RRS_arima), "hourly observations\n")
+```
+
+## ARIMA Modeling of RRS MCPC
+
+We fit a manual ARIMA model to the RRS training series. Parameters are selected from the ACF and PACF plots in the data exploration file without using `auto.arima()`.
+
+### Step 1: ACF and PACF on the Differenced Series
+
+The data exploration section established that the original RRS series is non-stationary. We apply one round of differencing and inspect the ACF and PACF to identify p and q.
+
+```{r acf_pacf_diff, message=FALSE, warning=FALSE, fig.width=14, fig.height=6}
+#Apply first difference
+RRS_diff1 <- diff(train_data$RRS, differences = 1)
+
+par(mfrow=c(1,2))
+Acf(RRS_diff1,  lag.max = 168, main = "ACF - First-Differenced RRS")
+Pacf(RRS_diff1, lag.max = 168, main = "PACF - First-Differenced RRS")
+par(mfrow=c(1,1))
+```
+> Analysis: Compared to the original series ACF shown in the data exploration section, the slow decay is gone after differencing, confirming the series is now stationary and d = 1 is sufficient. The ACF shows a significant negative spike at lag 1 that cuts off quickly, consistent with an MA(1) component, so we set q = 1. The PACF has a strong spike at lag 1 followed by a sharp drop, suggesting an AR(1) component, with smaller significant spikes continuing through lags 2 to 24, so we set p = 1. A prominent spike remains at lag 24 in both the ACF and PACF, reflecting daily seasonality that first differencing alone cannot remove. Combined with d = 1, the selected model is ARIMA(1, 1, 1). The residual seasonal structure at lag 24 will be addressed in the Fourier terms extension.
+
+### Step 2: Fitting ARIMA(1, 1, 1)
+
+```{r fit_arima}
+ARIMA_RRS <- Arima(ts_RRS_arima,
+                   order = c(1, 1, 1),
+                   include.drift = FALSE)
+
+print(ARIMA_RRS)
+```
+
+### Step 3: Residual Diagnostics
+
+```{r residuals, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
+checkresiduals(ARIMA_RRS)
+```
+
+```{r ljung_box}
+lb_test <- Box.test(ARIMA_RRS$residuals, lag = 24, type = "Ljung-Box")
+print(lb_test)
+```
+> Analysis: The Ljung-Box test strongly rejects white noise (p < 2.2e-16), indicating that significant autocorrelation structure remains in the residuals. The residual ACF confirms this, with a prominent spike at lag 24 and a smaller one at lag 48, showing that the daily seasonal cycle is not captured by ARIMA(1,1,1) alone. The residual time series plot shows that most of the large errors correspond to the scarcity-event price spikes concentrated in early 2024, and the histogram is heavily right-skewed rather than normally distributed. These results are expected given the strong seasonal structure identified in the differenced ACF/PACF, and motivate the use of Fourier terms to explicitly model the daily and weekly cycles in the next modeling step.
+
+## ARIMA + Fourier Modeling of RRS MCPC
+
+The residual diagnostics from ARIMA(1,1,1) show that the daily seasonal cycle at lag 24 is not captured by the base model. We extend the model by adding Fourier terms as external regressors, with k controlling the number of sine and cosine harmonics included. For a daily cycle of period 24, k ranges from 1 to 12 (period/2). We set k = 6 as a balanced choice between underfitting and overfitting.
+
+### Step 1: Generating Fourier Terms and Fitting ARIMA(1, 1, 1) + Fourier
+
+```{r fourier_fit, message=FALSE, warning=FALSE}
+#Generate Fourier terms for daily cycle (period = 24, k = 6)
+fourier_train <- fourier(ts_RRS_arima, K = 6)
+
+#Fit ARIMA(1,1,1) with Fourier terms as external regressors
+ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
+                            order = c(1, 1, 1),
+                            include.drift = FALSE,
+                            xreg = fourier_train)
+
+print(ARIMA_Fourier_RRS)
+```
+> Analysis: The model extends ARIMA(1,1,1) by incorporating 12 Fourier regressors (6 sine and 6 cosine pairs) representing the daily seasonal harmonics. The AIC drops from 159532.4 in the base ARIMA(1,1,1) to 159218.3 here, suggesting a modest improvement in overall fit.
+
+### Step 2: Residual Diagnostics
+
+```{r fourier_residuals, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
+checkresiduals(ARIMA_Fourier_RRS)
+```
+
+```{r fourier_ljung_box}
+lb_test_fourier <- Box.test(ARIMA_Fourier_RRS$residuals, lag = 24, type = "Ljung-Box")
+print(lb_test_fourier)
+```
+> Analysis: The Ljung-Box test still strongly rejects white noise (p < 2.2e-16), and the residual ACF shows a spike at lag 24 that remains comparable in magnitude to the base ARIMA(1,1,1), indicating that the Fourier terms with k = 6 have not meaningfully reduced the residual daily seasonal structure. The improvement is reflected in the AIC, which drops from 159532.4 to 159218.3, showing better overall fit, but the persistent lag 24 spike suggests that the daily seasonal pattern in this data is too irregular to be well captured by fixed Fourier. The large price spikes and right-skewed histogram are consistent with the base model.
+
