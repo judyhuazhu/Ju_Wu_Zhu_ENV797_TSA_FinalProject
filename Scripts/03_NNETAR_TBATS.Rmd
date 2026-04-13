@@ -20,7 +20,9 @@ RRS_nnetar_01 <- nnetar(ts_RRS_train)
 RRS_nnetar_fc <- forecast(RRS_nnetar_01, h = n_test)
 
 plot(RRS_nnetar_fc)
+```
 
+```{r}
 # Accuracy
 accuracy(RRS_nnetar_fc, ts_RRS_test)
 ```
@@ -42,17 +44,43 @@ mtts_RRS_train <- mtts_RRS[1:n_train]
 mtts_RRS_test  <- mtts_RRS[(n_train + 1):length(mtts_RRS)]
 
 # Fit TBATS model
-system.time({
-  RRS_tbats_01 <- tbats(mtts_RRS_train)
-})
+
+RRS_tbats_01 <- tbats(mtts_RRS_train, lambda = "auto")
 
 # Forecast
 RRS_tbats_fc <- forecast(RRS_tbats_01, h = n_test)
 
 # Plot forecast
-plot(RRS_tbats_fc)
+plot(RRS_tbats_fc,include = 0)
+lines(mtts_RRS_test, col = "red")
+```
 
+```{r}
 # Accuracy
 accuracy(RRS_tbats_fc, mtts_RRS_test)
 ```
+
+# Seasonal Naive as a baseline comparison
+Daily seasonal naive
+```{r}
+# Seasonal naive (daily pattern)
+RRS_snaive_fc <- snaive(ts_RRS_train, h = n_test)
+
+# Plot
+plot(RRS_snaive_fc)
+lines(ts_RRS_test, col = "red")
+
+# Accuracy
+accuracy(RRS_snaive_fc, ts_RRS_test)
+```
+Weekly seasonal naive
+```{r}
+RRS_snaive_w_fc <- snaive(ts_RRS_train, h = n_test, m = 168)
+
+plot(RRS_snaive_w_fc,include = 0)
+lines(ts_RRS_test, col = "red")
+
+accuracy(RRS_snaive_w_fc, ts_RRS_test)
+```
+
 
