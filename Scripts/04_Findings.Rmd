@@ -1,0 +1,50 @@
+Result table for model comparison
+
+All models are explored in 02 and 03, with same names maintianed here.
+
+```{r}
+# Extract test set metrics for each model
+
+get_metrics <- function(acc) {
+  c(
+    RMSE = acc["Test set", "RMSE"],
+    MAE  = acc["Test set", "MAE"],
+    MASE = acc["Test set", "MASE"]
+  )
+}
+
+# ARIMA
+acc_arima <- accuracy(forecast_arima, test_data$RRS)
+
+# ARIMA + Fourier
+acc_fourier <- accuracy(forecast_fourier, test_data$RRS)
+
+# NNETAR
+acc_nnetar <- accuracy(RRS_nnetar_fc, ts_RRS_test)
+
+# TBATS
+acc_tbats <- accuracy(RRS_tbats_fc, as.numeric(mtts_RRS_test))
+
+# Seasonal Naive (daily)
+acc_snaive_d <- accuracy(RRS_snaive_fc, ts_RRS_test)
+
+# Seasonal Naive (weekly)
+acc_snaive_w <- accuracy(RRS_snaive_w_fc, ts_RRS_test)
+
+# Combine into table
+comparison_table <- rbind(
+  ARIMA            = get_metrics(acc_arima),
+  ARIMA_Fourier    = get_metrics(acc_fourier),
+  NNETAR           = get_metrics(acc_nnetar),
+  TBATS            = get_metrics(acc_tbats),
+  SNaive_Daily     = get_metrics(acc_snaive_d),
+  SNaive_Weekly    = get_metrics(acc_snaive_w)
+)
+
+# Convert to dataframe
+comparison_table <- as.data.frame(comparison_table)
+
+# Print nicely
+round(comparison_table, 3)
+```
+
