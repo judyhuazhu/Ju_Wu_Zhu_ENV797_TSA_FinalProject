@@ -82,7 +82,7 @@ print(lb_test)
 
 The residual diagnostics from ARIMA(1,1,1) show that the daily seasonal cycle at lag 24 is not captured by the base model. We extend the model by adding Fourier terms as external regressors, with k controlling the number of sine and cosine harmonics included. For a daily cycle of period 24, k ranges from 1 to 12 (period/2). We set k = 6 as a balanced choice between underfitting and overfitting.
 
-### Step 1: Generating Fourier Terms and Fitting ARIMA(1, 1, 1) + Fourier
+### Step 1: Generating Fourier Terms and Fitting ARIMA(1, 1, 1) + Fourier (K=6)
 
 ```{r fourier_fit, message=FALSE, warning=FALSE}
 #Generate Fourier terms for daily cycle (period = 24, k = 6)
@@ -114,7 +114,7 @@ print(lb_test_fourier)
 ## Accuracy on Test Period
 ```{r}
 #Load test data
-test_data <- read.csv("./Data/test_period_clean/data_test.csv")
+test_data <- read.csv("../Data/test_period_clean/data_test.csv")
 n_test <- nrow(test_data)
 
 #ARIMA(1,1,1) forecast and accuracy
@@ -128,6 +128,69 @@ accuracy(forecast_arima, test_data$RRS)
 fourier_test <- fourier(ts_RRS_arima, K = 6, h = n_test)
 forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg = fourier_test, h = n_test)
 accuracy(forecast_fourier, test_data$RRS)
-
-
 ```
+
+# Fitting ARIMA + Fourier (grid search most suiatble K) 
+```{r}
+K_values <- 1:12
+
+results <- lapply(K_values, function(K) {
+  
+  fourier_train <- fourier(ts_RRS_arima, K = K)
+  
+  model <- Arima(ts_RRS_arima,
+                 order = c(1,1,1),
+                 xreg = fourier_train)
+  
+  n_test <- nrow(test_data)
+  fourier_test <- fourier(ts_RRS_arima, K = K, h = n_test)
+  
+  fc <- forecast(model, xreg = fourier_test, h = n_test)
+  
+  acc <- accuracy(fc, test_data$RRS)
+  
+  data.frame(
+    K = K,
+    RMSE = acc[2, "RMSE"],
+    MAE = acc[2, "MAE"]
+  )
+})
+
+do.call(rbind, results)
+```
+Now K=2 is performing the best, try auto arima since arima parameters may change with K.
+```{r}
+# Generate training regressors
+fourier_train <- fourier(ts_RRS_arima, K = 2)
+
+# Fit model
+fit_auto <- auto.arima(ts_RRS_arima,
+                       xreg = fourier_train,
+                       seasonal = FALSE)
+
+# Generate future regressors
+fourier_test <- fourier(ts_RRS_arima, K = 2, h = n_test)
+
+# Forecast WITH xreg
+fc_auto <- forecast(fit_auto,
+                    xreg = fourier_test,
+                    h = n_test)
+
+# Accuracy
+accuracy(fc_auto, test_data$RRS)
+```
+# Update the fourier model with best K and ARIMA parameters
+```{r}
+#ARIMA + Fourier forecast and accuracy
+fourier_train <- fourier(ts_RRS_arima, K = 2)
+ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
+                            order = c(1, 1, 1),
+                            include.drift = FALSE,
+                            xreg = fourier_train)
+
+fourier_test <- fourier(ts_RRS_arima, K = 2, h = n_test)
+forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg = fourier_test, h = n_test)
+accuracy(forecast_fourier, test_data$RRS)
+```
+```
+
