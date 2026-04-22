@@ -38,13 +38,15 @@ ts_RRS_arima <- ts(train_data$RRS,
 cat("Training ts length:", length(ts_RRS_arima), "hourly observations\n")
 ```
 
-## ARIMA Modeling of RRS MCPC
+## ARIMA Models
 
-We fit a manual ARIMA model to the RRS training series. 
+We include three ARIMA-based models: a baseline ARIMA(1,1,1), an ARIMA(1,1,1) with Fourier terms at k=6, and an ARIMA(1,1,1) with Fourier terms at the optimal k selected through grid search. Model order was chosen by inspecting the differenced ACF and PACF series.
 
-### Step 1: ACF and PACF on the Differenced Series
+#### Model 1: ARIMA(1,1,1)
 
-The data exploration section established that the original RRS series is non-stationary. We apply one round of differencing and inspect the ACF and PACF to identify p and q.
+**Differenced Series: ACF and PACF**
+
+The data exploration section showed that the RRS series is non-stationary, so we applied one round of first differencing before inspecting the ACF and PACF to identify the model order.
 
 ```{r acf_pacf_diff, message=FALSE, warning=FALSE, fig.width=14, fig.height=6}
 #Apply first difference
@@ -55,9 +57,9 @@ Acf(RRS_diff1,  lag.max = 168, main = "ACF - First-Differenced RRS")
 Pacf(RRS_diff1, lag.max = 168, main = "PACF - First-Differenced RRS")
 par(mfrow=c(1,1))
 ```
-> Analysis: Compared to the original series ACF shown in the data exploration section, the slow decay is gone after differencing, confirming the series is now stationary and d = 1 is sufficient. The ACF shows a significant negative spike at lag 1 that cuts off quickly, consistent with an MA(1) component, so we set q = 1. The PACF has a strong spike at lag 1 followed by a sharp drop, suggesting an AR(1) component, with smaller significant spikes continuing through lags 2 to 24, so we set p = 1. A prominent spike remains at lag 24 in both the ACF and PACF, reflecting daily seasonality that first differencing alone cannot remove. Combined with d = 1, the selected model is ARIMA(1, 1, 1). The residual seasonal structure at lag 24 will be addressed in the Fourier terms extension.
+After differencing, the slow ACF decay in the original series is gone, confirming d=1 is sufficient for stationarity. The ACF shows a significant negative spike at lag 1 followed by values mostly within the confidence bounds, consistent with MA(1), so we set q=1. The PACF shows a dominant spike at lag 1 followed by smaller significant spikes at higher lags, so we set p=1. Spikes at lags 24 and 48 are also visible in the ACF, pointing to a residual daily seasonal cycle that first differencing does not remove. It is addressed through Fourier terms in the next step.
 
-### Step 2: Fitting ARIMA(1, 1, 1)
+**Model Fit and Residual Diagnostics**
 
 ```{r fit_arima}
 ARIMA_RRS <- Arima(ts_RRS_arima,
@@ -66,7 +68,6 @@ ARIMA_RRS <- Arima(ts_RRS_arima,
 
 print(ARIMA_RRS)
 ```
-### Step 3: Residual Diagnostics
 
 ```{r residuals, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
 checkresiduals(ARIMA_RRS)
@@ -76,13 +77,13 @@ checkresiduals(ARIMA_RRS)
 lb_test <- Box.test(ARIMA_RRS$residuals, lag = 24, type = "Ljung-Box")
 print(lb_test)
 ```
-> Analysis: The Ljung-Box test strongly rejects white noise (p < 2.2e-16), indicating that significant autocorrelation structure remains in the residuals. The residual ACF confirms this, with a prominent spike at lag 24 and a smaller one at lag 48, showing that the daily seasonal cycle is not captured by ARIMA(1,1,1) alone. The residual time series plot shows that most of the large errors correspond to the scarcity-event price spikes concentrated in early 2024, and the histogram is heavily right-skewed rather than normally distributed. These results are expected given the strong seasonal structure identified in the differenced ACF/PACF, and motivate the use of Fourier terms to explicitly model the daily and weekly cycles in the next modeling step.
+The Ljung-Box test strongly rejects white noise (Q*=3546.2, p<2.2e-16), showing significant autocorrelation remains in the residuals. The residual ACF shows clear spikes at lags 24 and 48, confirming that the daily seasonal cycle is not captured by ARIMA(1,1,1) alone. The histogram is heavily right skewed, reflecting the non-normal distribution driven by extreme price events. These results motivate adding Fourier terms to directly model the daily seasonal cycle in the next step.
 
-## ARIMA + Fourier Modeling of RRS MCPC
+#### Model 2: ARIMA(1,1,1) + Fourier (k = 6)
 
-The residual diagnostics from ARIMA(1,1,1) show that the daily seasonal cycle at lag 24 is not captured by the base model. We extend the model by adding Fourier terms as external regressors, with k controlling the number of sine and cosine harmonics included. For a daily cycle of period 24, k ranges from 1 to 12 (period/2). We set k = 6 as a balanced choice between underfitting and overfitting.
+The residual diagnostics from ARIMA(1,1,1) show that the daily seasonal cycle at lag 24 is not captured by the base model. We extend the model by adding Fourier terms as external regressors. For a daily cycle of period 24, k ranges from 1 to 12 (period/2). We set k = 6 as a balanced choice between underfitting and overfitting.
 
-### Step 1: Generating Fourier Terms and Fitting ARIMA(1, 1, 1) + Fourier (K=6)
+**Model Fit and Residual Diagnostics**
 
 ```{r fourier_fit, message=FALSE, warning=FALSE}
 #Generate Fourier terms for daily cycle (period = 24, k = 6)
@@ -96,9 +97,6 @@ ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
 
 print(ARIMA_Fourier_RRS)
 ```
-> Analysis: The model extends ARIMA(1,1,1) by incorporating 12 Fourier regressors (6 sine and 6 cosine pairs) representing the daily seasonal harmonics. The AIC drops from 159532.4 in the base ARIMA(1,1,1) to 159218.3 here, suggesting a modest improvement in overall fit.
-
-### Step 2: Residual Diagnostics
 
 ```{r fourier_residuals, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
 checkresiduals(ARIMA_Fourier_RRS)
@@ -108,10 +106,9 @@ checkresiduals(ARIMA_Fourier_RRS)
 lb_test_fourier <- Box.test(ARIMA_Fourier_RRS$residuals, lag = 24, type = "Ljung-Box")
 print(lb_test_fourier)
 ```
-> Analysis: The Ljung-Box test still strongly rejects white noise (p < 2.2e-16), and the residual ACF shows a spike at lag 24 that remains comparable in magnitude to the base ARIMA(1,1,1), indicating that the Fourier terms with k = 6 have not meaningfully reduced the residual daily seasonal structure. The improvement is reflected in the AIC, which drops from 159532.4 to 159218.3, showing better overall fit, but the persistent lag 24 spike suggests that the daily seasonal pattern in this data is too irregular to be well captured by fixed Fourier. The large price spikes and right-skewed histogram are consistent with the base model.
+The AIC drops from 159532.4 to 159218.3, showing better overall fit. However, the Ljung Box test still strongly rejects white noise (Q*=2810.1, p<2.2e-16), and spikes at lags 24 and 48 remain in the residual ACF, suggesting the daily seasonal pattern in RRS prices is too irregular to be fully captured by fixed Fourier.
 
-
-## Accuracy on Test Period
+**Accuracy on Test Period**
 ```{r}
 #Load test data
 test_data <- read.csv("../Data/test_period_clean/data_test.csv")
@@ -125,12 +122,15 @@ accuracy(forecast_arima, test_data$RRS)
 
 ```{r}
 #ARIMA + Fourier forecast and accuracy
-fourier_test <- fourier(ts_RRS_arima, K = 6, h = n_test)
-forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg = fourier_test, h = n_test)
+fourier_test <- fourier(ts_RRS_arima, K=6, h=n_test)
+forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg=fourier_test, h=n_test)
 accuracy(forecast_fourier, test_data$RRS)
 ```
+The Fourier extension marginally improves training set RMSE (20.15 vs. 20.34 for the baseline), but this does not carry over to the test set. Test RMSE increases slightly from 29.94 to 30.06, and test MAPE jumps significantly from 180.6 to 504.1, suggesting K = 6 overfits the training data and does not generalize well to the test period. This motivates the grid search for a better-fitting k.
 
-# Fitting ARIMA + Fourier (grid search most suiatble K) 
+#### Model 3: ARIMA(1,1,1) + Fourier (k=2)
+
+**Fitting ARIMA + Fourier (grid search most suiatble K)**
 ```{r}
 K_values <- 1:12
 
@@ -179,7 +179,7 @@ fc_auto <- forecast(fit_auto,
 # Accuracy
 accuracy(fc_auto, test_data$RRS)
 ```
-# Update the fourier model with best K and ARIMA parameters
+**Update the fourier model with best K and ARIMA parameters**
 ```{r}
 #ARIMA + Fourier forecast and accuracy
 fourier_train <- fourier(ts_RRS_arima, K = 2)
