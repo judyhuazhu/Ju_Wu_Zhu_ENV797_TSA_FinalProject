@@ -20,16 +20,13 @@ acc_arima <- accuracy(forecast_arima, test_data$RRS)
 acc_fourier <- accuracy(forecast_fourier, test_data$RRS)
 
 # NNETAR
-acc_nnetar <- accuracy(RRS_nnetar_fc, ts_RRS_test)
+acc_nnetar <- accuracy(RRS_nnetar_fc, test_data$RRS)
 
 # TBATS
 acc_tbats <- accuracy(RRS_tbats_fc, as.numeric(mtts_RRS_test))
 
 # Seasonal Naive (daily)
-acc_snaive_d <- accuracy(RRS_snaive_fc, ts_RRS_test)
-
-# Seasonal Naive (weekly)
-acc_snaive_w <- accuracy(RRS_snaive_w_fc, ts_RRS_test_w)
+acc_snaive_d <- accuracy(RRS_snaive_fc, test_data$RRS)
 
 # Combine into table
 comparison_table <- rbind(
@@ -37,8 +34,7 @@ comparison_table <- rbind(
   ARIMA_Fourier    = get_metrics(acc_fourier),
   NNETAR           = get_metrics(acc_nnetar),
   TBATS            = get_metrics(acc_tbats),
-  SNaive_Daily     = get_metrics(acc_snaive_d),
-  SNaive_Weekly    = get_metrics(acc_snaive_w)
+  SNaive_Daily     = get_metrics(acc_snaive_d)
 )
 
 # Convert to dataframe
@@ -55,15 +51,14 @@ write.csv(comparison_table, "model_comparison.csv", row.names = FALSE)
 pdf("forecast_plot.pdf",
     width = 10, height = 6) 
 
-time_test <- data_wide$Date[(n_train + 1):(n_train + n_test)]
-plot(time_test, ts_RRS_test,
+plot(ts_RRS_test,
      type = "l",
      col = "black", lwd = 2,
      main = "Forecast vs Actual (Real Time)",
      xlab = "Date", ylab = "RRS")
 
-lines(time_test, forecast_arima$mean, col = "#1f77b4", lwd = 1)
-lines(time_test, forecast_fourier$mean, col = "#2ca02c", lwd = 1)
+lines( forecast_arima$mean, col = "#1f77b4", lwd = 1)
+lines(forecast_fourier$mean, col = "#2ca02c", lwd = 1)
 lines(time_test, RRS_tbats_fc$mean, col = "#ff7f0e", lwd = 1)
 lines(time_test, RRS_snaive_fc$mean, col = "#d62728", lwd = 1, lty = 2)
 

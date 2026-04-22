@@ -3,3 +3,29 @@ title: "Ju_Wu_Zhu_Final_Report"
 output: html_document
 ---
 
+## Introduction, Motivation, Relevance, Objectives
+
+Write a few paragraphs detailing the rationale for your study. This should include both the context of the topic as well as a rationale for your choice of dataset (reason for location, variables, etc.). You may choose to include citations if you like or any other reference you may have used during the project (optional).
+
+## Dataset information
+
+Provide information on how the dataset for this analysis were collected (source), the data contained in the dataset (format). Describe how you wrangled/processed your dataset to get the time series object.
+
+Add a table that summarizes your data structure (variables, units, ranges and/or central tendencies, data source if multiple are used, etc.). This table should inserted as a `kable` function in an R chunk. Just show the first 10 rows of your data. Do not include the code used to generate your table.
+
+
+## Analysis (Methods and Models)
+
+### Methods
+We separated the dataset into train and test pairs, distinguished by time before (18000 obs) and after (2352 obs) 2026. 
+Then trained the data with ARIMA model, ARIMA + Fourier, NNETAR, TBATS, and daily seasonal Naive model.
+Lastly, all trained models are tested by their RMSE to true values in test set for comparison and discussion.
+
+### ARIMA
+
+### Result table
+
+
+Each figure should be accompanied by a caption, and referenced within the text if applicable.
+
+#### Summary and Conclusions

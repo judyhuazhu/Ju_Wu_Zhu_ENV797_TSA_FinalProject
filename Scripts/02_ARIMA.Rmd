@@ -180,4 +180,18 @@ fc_auto <- forecast(fit_auto,
 # Accuracy
 accuracy(fc_auto, test_data$RRS)
 ```
+# Update the fourier model with best K and ARIMA parameters
+```{r}
+#ARIMA + Fourier forecast and accuracy
+fourier_train <- fourier(ts_RRS_arima, K = 2)
+ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
+                            order = c(1, 1, 1),
+                            include.drift = FALSE,
+                            xreg = fourier_train)
+
+fourier_test <- fourier(ts_RRS_arima, K = 2, h = n_test)
+forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg = fourier_test, h = n_test)
+accuracy(forecast_fourier, test_data$RRS)
+```
+```
 
