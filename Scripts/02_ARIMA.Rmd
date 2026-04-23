@@ -6,7 +6,7 @@ output:
 ## Setting R code chunk options
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE) 
+knitr::opts_chunk$set(echo = FALSE,tidy.opts=list(width.cutoff=80), tidy=FALSE) 
 ```
 
 ## Loading packages and initializing
@@ -48,7 +48,7 @@ We include three ARIMA-based models: a baseline ARIMA(1,1,1), an ARIMA(1,1,1) wi
 
 The data exploration section showed that the RRS series is non-stationary, so we applied one round of first differencing before inspecting the ACF and PACF to identify the model order.
 
-```{r acf_pacf_diff, message=FALSE, warning=FALSE, fig.width=14, fig.height=6}
+```{r acf_pacf_diff, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=6}
 #Apply first difference
 RRS_diff1 <- diff(train_data$RRS, differences = 1)
 
@@ -69,7 +69,7 @@ ARIMA_RRS <- Arima(ts_RRS_arima,
 print(ARIMA_RRS)
 ```
 
-```{r residuals, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
+```{r residuals, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
 checkresiduals(ARIMA_RRS)
 ```
 
@@ -85,7 +85,7 @@ The residual diagnostics from ARIMA(1,1,1) show that the daily seasonal cycle at
 
 **Model Fit and Residual Diagnostics**
 
-```{r fourier_fit, message=FALSE, warning=FALSE}
+```{r fourier_fit, echo=FALSE, message=FALSE, warning=FALSE}
 #Generate Fourier terms for daily cycle (period = 24, k = 6)
 fourier_train <- fourier(ts_RRS_arima, K = 6)
 
@@ -98,7 +98,7 @@ ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
 print(ARIMA_Fourier_RRS)
 ```
 
-```{r fourier_residuals, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
+```{r fourier_residuals, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=8}
 checkresiduals(ARIMA_Fourier_RRS)
 ```
 
