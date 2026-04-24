@@ -3,6 +3,16 @@ title: "Ju_Wu_Zhu_Final_Report"
 output: html_document
 ---
 
+```{r package, message=FALSE, warning=FALSE, include=FALSE}
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(tidyverse)
+
+#Load processed training data exported from data exploration
+train_data <- read.csv("./Data/train_period_clean/data_train.csv")
+```
+
 ## Introduction, Motivation, Relevance, Objectives
 
 Write a few paragraphs detailing the rationale for your study. This should include both the context of the topic as well as a rationale for your choice of dataset (reason for location, variables, etc.). You may choose to include citations if you like or any other reference you may have used during the project (optional).
@@ -13,19 +23,386 @@ Provide information on how the dataset for this analysis were collected (source)
 
 Add a table that summarizes your data structure (variables, units, ranges and/or central tendencies, data source if multiple are used, etc.). This table should inserted as a `kable` function in an R chunk. Just show the first 10 rows of your data. Do not include the code used to generate your table.
 
-
 ## Analysis (Methods and Models)
 
 ### Methods
-We separated the dataset into train and test pairs, distinguished by time before (18000 obs) and after (2352 obs) 2026. 
-Then trained the data with ARIMA model, ARIMA + Fourier, NNETAR, TBATS, and daily seasonal Naive model.
-Lastly, all trained models are tested by their RMSE to true values in test set for comparison and discussion.
+
+We separated the dataset into train and test pairs, distinguished by time before (18000 obs) and after (2352 obs) 2026. Then trained the data with ARIMA model, ARIMA + Fourier, NNETAR, TBATS, and daily seasonal Naive model. Lastly, all trained models are tested by their RMSE to true values in test set for comparison and discussion.
 
 ### ARIMA
 
+We include three ARIMA-based models: a baseline ARIMA(1,1,1), an ARIMA(1,1,1) with Fourier terms at k=6, and an ARIMA(1,1,1) with Fourier terms at the optimal k selected through grid search. Model order was chosen by inspecting the differenced ACF and PACF series.
+
+#### Model 1: ARIMA(1,1,1)
+
+**Differenced Series: ACF and PACF**
+
+The data exploration section showed that the RRS series is non-stationary, so we applied one round of first differencing before inspecting the ACF and PACF to identify the model order.
+
+```{r acf_pacf_diff, echo=FALSE, fig.height=6, fig.width=14, message=FALSE, warning=FALSE}
+#Apply first difference
+RRS_diff1 <- diff(train_data$RRS, differences = 1)
+
+par(mfrow=c(1,2))
+Acf(RRS_diff1,  lag.max = 168, main = "ACF - First-Differenced RRS")
+Pacf(RRS_diff1, lag.max = 168, main = "PACF - First-Differenced RRS")
+par(mfrow=c(1,1))
+```
+
+After differencing, the slow ACF decay in the original series is gone, confirming d=1 is sufficient for stationarity. The ACF shows a significant negative spike at lag 1 followed by values mostly within the confidence bounds, consistent with MA(1), so we set q=1. The PACF shows a dominant spike at lag 1 followed by smaller significant spikes at higher lags, so we set p=1. Spikes at lags 24 and 48 are also visible in the ACF, pointing to a residual daily seasonal cycle that first differencing does not remove. It is addressed through Fourier terms in the next step.
+
+**Model Fit and Residual Diagnostics**
+
+```{r fit_arima, echo=FALSE}
+ARIMA_RRS <- Arima(ts_RRS_arima,
+                   order = c(1, 1, 1),
+                   include.drift = FALSE)
+
+print(ARIMA_RRS)
+```
+
+```{r residuals, echo=FALSE, fig.height=8, fig.width=14, message=FALSE, warning=FALSE}
+checkresiduals(ARIMA_RRS)
+```
+
+```{r ljung_box, echo=FALSE}
+lb_test <- Box.test(ARIMA_RRS$residuals, lag = 24, type = "Ljung-Box")
+print(lb_test)
+```
+
+The Ljung-Box test strongly rejects white noise (Q\*=3546.2, p\<2.2e-16), showing significant autocorrelation remains in the residuals. The residual ACF shows clear spikes at lags 24 and 48, confirming that the daily seasonal cycle is not captured by ARIMA(1,1,1) alone. The histogram is heavily right skewed, reflecting the non-normal distribution driven by extreme price events. These results motivate adding Fourier terms to directly model the daily seasonal cycle in the next step.
+
+#### Model 2: ARIMA(1,1,1) + Fourier (k = 6)
+
+The residual diagnostics from ARIMA(1,1,1) show that the daily seasonal cycle at lag 24 is not captured by the base model. We extend the model by adding Fourier terms as external regressors. For a daily cycle of period 24, k ranges from 1 to 12 (period/2). We set k = 6 as a balanced choice between underfitting and overfitting before gridding search all possibilitys between 1\<k\<12.
+
+**Model Fit and Residual Diagnostics**
+
+```{r fourier_fit, echo=FALSE, message=FALSE, warning=FALSE}
+#Generate Fourier terms for daily cycle (period = 24, k = 6)
+fourier_train <- fourier(ts_RRS_arima, K = 6)
+
+#Fit ARIMA(1,1,1) with Fourier terms as external regressors
+ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
+                            order = c(1, 1, 1),
+                            include.drift = FALSE,
+                            xreg = fourier_train)
+
+print(ARIMA_Fourier_RRS)
+```
+
+```{r fourier_residuals, echo=FALSE, fig.height=8, fig.width=14, message=FALSE, warning=FALSE}
+checkresiduals(ARIMA_Fourier_RRS)
+```
+
+```{r fourier_ljung_box, echo=FALSE}
+lb_test_fourier <- Box.test(ARIMA_Fourier_RRS$residuals, lag = 24, type = "Ljung-Box")
+print(lb_test_fourier)
+```
+
+The AIC drops from 159532.4 to 159218.3, showing better overall fit. However, the Ljung Box test still strongly rejects white noise (Q\*=2810.1, p\<2.2e-16), and spikes at lags 24 and 48 remain in the residual ACF, suggesting the daily seasonal pattern in RRS prices is too irregular to be fully captured by fixed Fourier.
+
+**Accuracy on Test Period**
+
+```{r echo=FALSE}
+#Load test data
+test_data <- read.csv("./Data/test_period_clean/data_test.csv")
+n_test <- nrow(test_data)
+
+#ARIMA(1,1,1) forecast and accuracy
+forecast_arima <- forecast(ARIMA_RRS, h = n_test)
+accuracy(forecast_arima, test_data$RRS)
+```
+
+```{r}
+#ARIMA + Fourier forecast and accuracy
+fourier_test <- fourier(ts_RRS_arima, K=6, h=n_test)
+forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg=fourier_test, h=n_test)
+accuracy(forecast_fourier, test_data$RRS)
+```
+
+The Fourier extension marginally improves training set RMSE (20.15 vs. 20.34 for the baseline), but this does not carry over to the test set. Test RMSE increases slightly from 29.94 to 30.06, and test MAPE jumps significantly from 180.6 to 504.1, suggesting K = 6 overfits the training data and does not generalize well to the test period. This motivates the grid search for a better-fitting k.
+
+#### Model 3: ARIMA(1,1,1) + Fourier (k=2)
+
+**Fitting ARIMA + Fourier (grid search most suiatble K)**
+
+```{r echo=FALSE}
+K_values <- 1:12
+
+results <- lapply(K_values, function(K) {
+  
+  fourier_train <- fourier(ts_RRS_arima, K = K)
+  
+  model <- Arima(ts_RRS_arima,
+                 order = c(1,1,1),
+                 xreg = fourier_train)
+  
+  n_test <- nrow(test_data)
+  fourier_test <- fourier(ts_RRS_arima, K = K, h = n_test)
+  
+  fc <- forecast(model, xreg = fourier_test, h = n_test)
+  
+  acc <- accuracy(fc, test_data$RRS)
+  
+  data.frame(
+    K = K,
+    RMSE = acc[2, "RMSE"],
+    MAE = acc[2, "MAE"]
+  )
+})
+
+do.call(rbind, results)
+```
+
+Now K=2 is performing the best, try auto arima since arima parameters may change with K.
+
+```{r}
+# Generate training regressors
+fourier_train <- fourier(ts_RRS_arima, K = 2)
+
+# Fit model
+fit_auto <- auto.arima(ts_RRS_arima,
+                       xreg = fourier_train,
+                       seasonal = FALSE)
+
+# Generate future regressors
+fourier_test <- fourier(ts_RRS_arima, K = 2, h = n_test)
+
+# Forecast WITH xreg
+fc_auto <- forecast(fit_auto,
+                    xreg = fourier_test,
+                    h = n_test)
+
+# Accuracy
+accuracy(fc_auto, test_data$RRS)
+```
+
+**Update the fourier model with best K and ARIMA parameters**
+
+```{r}
+#ARIMA + Fourier forecast and accuracy
+fourier_train <- fourier(ts_RRS_arima, K = 2)
+ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
+                            order = c(1, 1, 1),
+                            include.drift = FALSE,
+                            xreg = fourier_train)
+
+fourier_test <- fourier(ts_RRS_arima, K = 2, h = n_test)
+forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg = fourier_test, h = n_test)
+accuracy(forecast_fourier, test_data$RRS)
+```
+
+### Other models
+We then built basic NNETAR, TBATS, and daily seasonal naive models to explore which can capture the trend and forecast best, compared to ARIMA models.
+
+#### NNETAR
+Neural network model (NNETAR) is know for capture non-linear trends and forecast price picks.
+
+```{r include=FALSE}
+ts_RRS_train <- ts(RRS_train$RRS,
+                   frequency = 24)
+ts_RRS_test <- ts(RRS_test$RRS,
+                   frequency = 24)
+```
+
+```{r echo=FALSE}
+# fit model
+RRS_nnetar_01 <- nnetar(ts_RRS_train)
+# forecast
+RRS_nnetar_fc <- forecast(RRS_nnetar_01, h = 2352)
+plot(RRS_nnetar_fc)
+```
+From the plot above (with number of total days in x-axis), we can see the models fails to forecast future price spikes.
+```{r}
+# Accuracy
+accuracy(RRS_nnetar_fc, RRS_test$RRS)
+```
+The auto model generates m = 24, p (nonseasonal lag) = 28, and P (seasonal lag) = 1, size = 14. This size (number of layers in this network) is unnecessarily high for a simple model, which can be further tuned if chosen. RMSE is performing relatively well compared to ARIMA.
+
+#### TBATS
+TBATS may capture multi-seasonality, though smooth irregular patterns and noises (which is inherently an important part in RRS price); we explored how it may perform in forecasting for our goal. Lambda is set automatically.
+```{r echo=FALSE}
+mtts_RRS_train <- msts(
+  RRS_train$RRS,
+  seasonal.periods = c(24, 168)
+)
+mtts_RRS_test <- msts(
+  RRS_test$RRS,
+  seasonal.periods = c(24, 168)
+)
+
+# Fit TBATS model
+RRS_tbats_01 <- tbats(mtts_RRS_train, lambda = "auto")
+
+# Forecast
+RRS_tbats_fc <- forecast(RRS_tbats_01, h = 2352)
+```
+
+```{r}
+# Accuracy
+accuracy(RRS_tbats_fc, RRS_test$RRS)
+```
+
+# Seasonal Naive as a baseline comparison
+Lastly, daily seasonal naive is built as a baseline, assuming the exact price for 2025 will repeat in 2026 for the same day.
+```{r}
+# Seasonal naive (daily pattern)
+RRS_snaive_fc <- snaive(ts_RRS_train, h = 2352)
+
+# Plot
+plot(RRS_snaive_fc)
+lines(ts_RRS_test, col = "red")
+
+# Accuracy
+accuracy(RRS_snaive_fc,  RRS_test$RRS)
+```
+Unexpectedly, the seasonal naive model has a good RMSE on the test set compared to other more complex models, though higher RMSE for the training set. We will compare all models in later sections
 ### Result table
+```{r}
+# Extract test set metrics for each model
+get_metrics <- function(acc) {
+  c(
+    RMSE = acc["Test set", "RMSE"],
+    MAE  = acc["Test set", "MAE"],
+    MASE = acc["Test set", "MASE"]
+  )
+}
+
+# ARIMA
+acc_arima <- accuracy(forecast_arima, test_data$RRS)
+
+# ARIMA + Fourier
+acc_fourier <- accuracy(forecast_fourier, test_data$RRS)
+
+# NNETAR
+acc_nnetar <- accuracy(RRS_nnetar_fc, test_data$RRS)
+
+# TBATS
+acc_tbats <- accuracy(RRS_tbats_fc, as.numeric(mtts_RRS_test))
+
+# Seasonal Naive (daily)
+acc_snaive_d <- accuracy(RRS_snaive_fc, test_data$RRS)
+
+# Combine into table
+comparison_table <- rbind(
+  ARIMA            = get_metrics(acc_arima),
+  ARIMA_Fourier    = get_metrics(acc_fourier),
+  NNETAR           = get_metrics(acc_nnetar),
+  TBATS            = get_metrics(acc_tbats),
+  SNaive_Daily     = get_metrics(acc_snaive_d)
+)
+
+# Convert to dataframe
+comparison_table <- as.data.frame(comparison_table)
+
+# Print nicely
+round(comparison_table, 3)
+write.csv(comparison_table, "model_comparison.csv", row.names = FALSE)
+```
+The results table indicates that TBATS performs best overall, achieving the lowest MAE and MASE by effectively capturing complex seasonality and fluctuations. The daily seasonal naïve model also performs well surprisingly, suggesting that RRS prices have a strong and consistent daily cycle. ARIMA provides reasonable accuracy, while NNETAR is moderate, and ARIMA with Fourier terms performs worst, likely due to its inability to capture sharp, irregular price movements typical in ancillary service markets.
+
+### Result plots
+```{r echo=FALSE}
+plot(time_index, ts_RRS_test,
+     type = "l",
+     col = "black", lwd = 2,
+     main = "Forecast vs Actual (Real Time)",
+     xlab = "Date", ylab = "RRS")
+
+lines(time_index, forecast_arima$mean, col = "#1f77b4", lwd = 1)
+lines(time_index, forecast_fourier$mean, col = "#2ca02c", lwd = 1)
+lines(time_index, RRS_tbats_fc$mean, col = "#ff7f0e", lwd = 1)
+lines(time_index, RRS_snaive_fc$mean, col = "#d62728", lwd = 1, lty = 2)
+
+legend("topright",
+       legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
+       col = c("black", "#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"),
+       lwd = 2, lty = c(1,1,1,1,2),
+       bty = "n")
+
+```
+
+```{r echo=FALSE}
+ylim_use <- c(0, quantile(ts_RRS_test, 0.99, na.rm = TRUE))
+
+plot(time_index, ts_RRS_test,
+     type = "l",
+     col = "black", lwd = 2,
+     ylim = ylim_use,
+     main = "Forecast vs Actual (Zoomed)",
+     xlab = "Date", ylab = "RRS")
+
+lines(time_index, forecast_arima$mean,   col = "#1f77b4", lwd = 1)
+lines(time_index, forecast_fourier$mean, col = "#2ca02c", lwd = 1)
+lines(time_index, RRS_tbats_fc$mean,     col = "#ff7f0e", lwd = 1)
+lines(time_index, RRS_snaive_fc$mean,    col = "#d62728", lwd = 1, lty = 2)
+
+legend("topright",
+       legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
+       col = c("black", "#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"),
+       lwd = 1, 
+       cex = 0.8,
+       lty = c(1,1,1,1,2), bty = "n")
+```
+The two graphs above showed that over the full time horizon, RRS prices are generally low but exhibit a sharp spike in late January in 2026, reflecting a likely scarcity or system stress event in ERCOT. All models struggle to capture this extreme spike, with forecasts remaining relatively smooth and close to baseline levels. This highlights the difficulty of predicting rare, high-impact events in ancillary service markets, where price dynamics are largely stable but occasionally driven by sudden reliability needs.
+```{r echo=FALSE}
+#Zoom in to see last week of January 
+# Define window (last week of Jan)
+start_date <- as.POSIXct("2026-01-25 00:00")
+end_date   <- as.POSIXct("2026-01-31 23:59")
+
+idx <- time_index >= start_date & time_index <= end_date
+plot(time_index[idx], ts_RRS_test[idx],
+     type = "l",
+     col = "black", lwd = 2,
+     main = "Forecast vs Actual (Last Week of January)",
+     xlab = "Date", ylab = "RRS")
+
+lines(time_index[idx], forecast_arima$mean[idx], col = "#1f77b4", lwd = 1)
+lines(time_index[idx], forecast_fourier$mean[idx], col = "#2ca02c", lwd = 1)
+lines(time_index[idx], RRS_tbats_fc$mean[idx], col = "#ff7f0e", lwd = 1)
+lines(time_index[idx], RRS_snaive_fc$mean[idx], col = "#d62728", lwd = 1, lty = 2)
+
+legend("topright",
+       legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
+       col = c("black", "#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"),
+       lwd = 2, lty = c(1,1,1,1,2),
+       bty = "n")
+
+```
+Focusing on the last week of January reveals more detail around the volatility period. The actual series shows rapid fluctuations and a pronounced spike, while the models track the general daily pattern but fail to match the magnitude of extreme movements. TBATS and ARIMA follow the underlying structure more closely, whereas the seasonal naïve model captures timing but underestimates variability, reinforcing that models can capture routine behavior but not sudden shocks.
+
+```{r}
+#Zoom in to see last week of January 
+# Define window (last week of Jan)
+start_date <- as.POSIXct("2026-01-25 00:00")
+end_date   <- as.POSIXct("2026-01-31 23:59")
+
+idx <- time_index >= start_date & time_index <= end_date
+plot(time_index[idx], ts_RRS_test[idx],
+     type = "l",
+     col = "black", lwd = 2,ylim = ylim_use,
+     main = "Forecast vs Actual (Last Week of January)",
+     xlab = "Date", ylab = "RRS")
+
+lines(time_index[idx], forecast_arima$mean[idx], col = "#1f77b4", lwd = 1)
+lines(time_index[idx], forecast_fourier$mean[idx], col = "#2ca02c", lwd = 1)
+lines(time_index[idx], RRS_tbats_fc$mean[idx], col = "#ff7f0e", lwd = 1)
+lines(time_index[idx], RRS_snaive_fc$mean[idx], col = "#d62728", lwd = 1, lty = 2)
+
+legend("topright",
+       legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
+       col = c("black", "#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"),
+       lwd = 2, lty = c(1,1,1,1,2),
+       bty = "n")
+```
+In the zoomed-in view, the dominance of the spike becomes even clearer relative to typical price levels. Most forecasts remain tightly clustered near zero to moderate values, missing both the height and abruptness of the peak. This emphasizes that while models are effective at capturing regular seasonality, they systematically underestimate extreme price excursions, which are critical in RRS markets driven by rare but significant reliability events.
+
+## Summary and Conclusions
+This study evaluates multiple time series models—ARIMA, ARIMA with Fourier terms, NNETAR, TBATS, and a seasonal naïve benchmark—for forecasting ERCOT’s Responsive Reserve Service (RRS) prices. Results show that while all models achieve similar RMSE, TBATS performs best overall based on MAE and MASE, indicating stronger accuracy in capturing underlying patterns. The daily seasonal naïve model also performs competitively, suggesting that RRS prices exhibit strong and persistent daily seasonality. ARIMA provides stable, moderate performance, while NNETAR offers limited improvement, and ARIMA with Fourier terms performs worst, likely due to its inability to capture irregular dynamics. Visual analysis further reveals that all models struggle to predict extreme price spikes, which are characteristic of RRS markets.
+
+The findings indicate that RRS prices in Texas are driven by a combination of stable daily patterns and occasional, high-magnitude volatility events. Models like TBATS, which can accommodate multiple seasonalities and flexible dynamics, are better suited for this environment, though even the best-performing models fail to anticipate rare spikes. From a practical perspective, simple models such as seasonal naïve can serve as strong baselines, while more advanced models provide incremental improvements in routine conditions but limited gains during stress events.
 
 
-Each figure should be accompanied by a caption, and referenced within the text if applicable.
-
-#### Summary and Conclusions
+This study has several limitations. First, the models rely solely on historical price data and do not incorporate exogenous variables such as load, weather, or system conditions, which are key drivers of RRS price spikes. Second, the evaluation focuses on aggregate error metrics, which may underrepresent model performance during extreme but economically significant events. Third, the sample size and time horizon may limit the ability to generalize results across different market regimes. Finally, all models considered are primarily statistical and may not fully capture the structural and regime-switching behavior inherent in ancillary service markets like ERCOT.
