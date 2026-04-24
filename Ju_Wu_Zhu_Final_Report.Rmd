@@ -211,7 +211,6 @@ ts_RRS_test <- ts(RRS_test$RRS,
 RRS_nnetar_01 <- nnetar(ts_RRS_train)
 # forecast
 RRS_nnetar_fc <- forecast(RRS_nnetar_01, h = 2352)
-plot(RRS_nnetar_fc)
 ```
 From the plot above (with number of total days in x-axis), we can see the models fails to forecast future price spikes.
 ```{r}
