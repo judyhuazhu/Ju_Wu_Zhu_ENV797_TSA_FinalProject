@@ -311,6 +311,15 @@ After differencing, the slow ACF decay in the original series is gone, confirmin
 
 **Model Fit and Residual Diagnostics**
 
+```{r arima_setup, include=FALSE}
+test_data <- read.csv("./Data/test_period_clean/data_test.csv")
+n_test <- nrow(test_data)
+ts_RRS_arima <- ts(train_data$RRS, frequency = 24, start = c(1, 1))
+RRS_train <- train_data
+RRS_test  <- test_data
+time_index <- as.POSIXct(paste(test_data$Date, test_data$hourEnding), format = "%Y-%m-%d %H:%M")
+```
+
 ```{r fit_arima, echo=FALSE}
 ARIMA_RRS <- Arima(ts_RRS_arima,
                    order = c(1, 1, 1),
@@ -366,6 +375,7 @@ The AIC drops from 159532.4 to 159218.3, showing better overall fit. However, th
 #Load test data
 test_data <- read.csv("./Data/test_period_clean/data_test.csv")
 n_test <- nrow(test_data)
+
 
 #ARIMA(1,1,1) forecast and accuracy
 forecast_arima <- forecast(ARIMA_RRS, h = n_test)
