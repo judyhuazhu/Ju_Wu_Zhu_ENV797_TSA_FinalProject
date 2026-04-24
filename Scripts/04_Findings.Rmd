@@ -1,10 +1,26 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
 Result table for model comparison
 
 All models are explored in 02 and 03, with same names maintained here.
+```{r}
+library(lubridate)
+library(ggplot2)
+library(forecast)  
+library(Kendall)
+library(tseries)
+library(outliers)
+library(tidyverse)
+library(smooth)
+library(zoo)
+library(readxl)
+```
 
 ```{r}
 # Extract test set metrics for each model
-
 get_metrics <- function(acc) {
   c(
     RMSE = acc["Test set", "RMSE"],
@@ -45,46 +61,48 @@ round(comparison_table, 3)
 write.csv(comparison_table, "model_comparison.csv", row.names = FALSE)
 
 ```
+```{r}
+time_index <- as.POSIXct(
+  paste(RRS_test$Date, RRS_test$hourEnding),
+  format = "%Y-%m-%d %H:%M"
+)
+```
 
 ##Plot the result
 ```{r}
-pdf("forecast_plot.pdf",
-    width = 10, height = 6) 
-
-plot(ts_RRS_test,
+plot(time_index, ts_RRS_test,
      type = "l",
      col = "black", lwd = 2,
      main = "Forecast vs Actual (Real Time)",
      xlab = "Date", ylab = "RRS")
 
-lines( forecast_arima$mean, col = "#1f77b4", lwd = 1)
-lines(forecast_fourier$mean, col = "#2ca02c", lwd = 1)
-lines(time_test, RRS_tbats_fc$mean, col = "#ff7f0e", lwd = 1)
-lines(time_test, RRS_snaive_fc$mean, col = "#d62728", lwd = 1, lty = 2)
+lines(time_index, forecast_arima$mean, col = "#1f77b4", lwd = 1)
+lines(time_index, forecast_fourier$mean, col = "#2ca02c", lwd = 1)
+lines(time_index, RRS_tbats_fc$mean, col = "#ff7f0e", lwd = 1)
+lines(time_index, RRS_snaive_fc$mean, col = "#d62728", lwd = 1, lty = 2)
 
 legend("topright",
        legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
        col = c("black", "#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"),
        lwd = 2, lty = c(1,1,1,1,2),
        bty = "n")
-dev.off()
+
 ```
+
 ```{r}
-pdf("forecast_plot_zoomed.pdf",
-    width = 10, height = 6) 
 ylim_use <- c(0, quantile(ts_RRS_test, 0.99, na.rm = TRUE))
 
-plot(time_test, ts_RRS_test,
+plot(time_index, ts_RRS_test,
      type = "l",
      col = "black", lwd = 2,
      ylim = ylim_use,
      main = "Forecast vs Actual (Zoomed)",
      xlab = "Date", ylab = "RRS")
 
-lines(time_test, forecast_arima$mean,   col = "#1f77b4", lwd = 1)
-lines(time_test, forecast_fourier$mean, col = "#2ca02c", lwd = 1)
-lines(time_test, RRS_tbats_fc$mean,     col = "#ff7f0e", lwd = 1)
-lines(time_test, RRS_snaive_fc$mean,    col = "#d62728", lwd = 1, lty = 2)
+lines(time_index, forecast_arima$mean,   col = "#1f77b4", lwd = 1)
+lines(time_index, forecast_fourier$mean, col = "#2ca02c", lwd = 1)
+lines(time_index, RRS_tbats_fc$mean,     col = "#ff7f0e", lwd = 1)
+lines(time_index, RRS_snaive_fc$mean,    col = "#d62728", lwd = 1, lty = 2)
 
 legend("topright",
        legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
@@ -92,43 +110,60 @@ legend("topright",
        lwd = 1, 
        cex = 0.8,
        lty = c(1,1,1,1,2), bty = "n")
-dev.off()
 ```
-
+Over the full time horizon, RRS prices are generally low but exhibit a sharp spike in late January in 2026, reflecting a likely scarcity or system stress event in ERCOT. All models struggle to capture this extreme spike, with forecasts remaining relatively smooth and close to baseline levels. This highlights the difficulty of predicting rare, high-impact events in ancillary service markets, where price dynamics are largely stable but occasionally driven by sudden reliability needs.
 ```{r}
-pdf("forecast_plot_2days.pdf",
-    width = 10, height = 6) 
-data_wide$Datetime <- as.POSIXct(
-  paste(data_wide$Date, data_wide$hourEnding),
-  format = "%Y-%m-%d %H:%M"
-)
-time_test <- data_wide$Datetime[(n_train + 1):(n_train + n_test)]
-# Select first 48 hours (2 days)
-idx <- 1:48
+#Zoom in to see last week of January 
+# Define window (last week of Jan)
+start_date <- as.POSIXct("2026-01-25 00:00")
+end_date   <- as.POSIXct("2026-01-31 23:59")
 
-# Plot actual values
-plot(time_test[idx], ts_RRS_test[idx],
+idx <- time_index >= start_date & time_index <= end_date
+plot(time_index[idx], ts_RRS_test[idx],
      type = "l",
      col = "black", lwd = 2,
-      ylim = c(0,5),
-     main = "Hourly Forecast vs Actual (2 Days)",
-     xlab = "Datetime", ylab = "RRS",
-     las = 1)
+     main = "Forecast vs Actual (Last Week of January)",
+     xlab = "Date", ylab = "RRS")
 
-# Add forecasts
-lines(time_test[idx], forecast_arima$mean[idx],   col = "#1f77b4", lwd = 2)
-lines(time_test[idx], forecast_fourier$mean[idx], col = "#2ca02c", lwd = 2)
-lines(time_test[idx], RRS_tbats_fc$mean[idx],     col = "#ff7f0e", lwd = 2)
-lines(time_test[idx], RRS_snaive_fc$mean[idx],    col = "#d62728", lwd = 2, lty = 2)
+lines(time_index[idx], forecast_arima$mean[idx], col = "#1f77b4", lwd = 1)
+lines(time_index[idx], forecast_fourier$mean[idx], col = "#2ca02c", lwd = 1)
+lines(time_index[idx], RRS_tbats_fc$mean[idx], col = "#ff7f0e", lwd = 1)
+lines(time_index[idx], RRS_snaive_fc$mean[idx], col = "#d62728", lwd = 1, lty = 2)
 
-# Add legend (smaller & clean)
 legend("topright",
        legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
        col = c("black", "#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"),
        lwd = 2, lty = c(1,1,1,1,2),
-       cex = 0.7, bty = "n")
-dev.off()
-```
+       bty = "n")
 
+```
+Focusing on the last week of January reveals more detail around the volatility period. The actual series shows rapid fluctuations and a pronounced spike, while the models track the general daily pattern but fail to match the magnitude of extreme movements. TBATS and ARIMA follow the underlying structure more closely, whereas the seasonal naïve model captures timing but underestimates variability, reinforcing that models can capture routine behavior but not sudden shocks.
+
+```{r}
+#Zoom in to see last week of January 
+# Define window (last week of Jan)
+start_date <- as.POSIXct("2026-01-25 00:00")
+end_date   <- as.POSIXct("2026-01-31 23:59")
+
+idx <- time_index >= start_date & time_index <= end_date
+plot(time_index[idx], ts_RRS_test[idx],
+     type = "l",
+     col = "black", lwd = 2,ylim = ylim_use,
+     main = "Forecast vs Actual (Last Week of January)",
+     xlab = "Date", ylab = "RRS")
+
+lines(time_index[idx], forecast_arima$mean[idx], col = "#1f77b4", lwd = 1)
+lines(time_index[idx], forecast_fourier$mean[idx], col = "#2ca02c", lwd = 1)
+lines(time_index[idx], RRS_tbats_fc$mean[idx], col = "#ff7f0e", lwd = 1)
+lines(time_index[idx], RRS_snaive_fc$mean[idx], col = "#d62728", lwd = 1, lty = 2)
+
+legend("topright",
+       legend = c("Actual", "ARIMA", "ARIMA+Fourier", "TBATS", "SNaive"),
+       col = c("black", "#1f77b4", "#2ca02c", "#ff7f0e", "#d62728"),
+       lwd = 2, lty = c(1,1,1,1,2),
+       bty = "n")
+
+```
+In the zoomed-in view, the dominance of the spike becomes even clearer relative to typical price levels. Most forecasts remain tightly clustered near zero to moderate values, missing both the height and abruptness of the peak. This emphasizes that while models are effective at capturing regular seasonality, they systematically underestimate extreme price excursions, which are critical in RRS markets driven by rare but significant reliability events.
 
 
