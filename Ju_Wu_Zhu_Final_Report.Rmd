@@ -177,16 +177,13 @@ cat("Training ts length:", length(ts_RRS_train), "hourly observations\n")
 
 ```{r dataset_table, echo=FALSE, message=FALSE, warning=FALSE}
 #Show first 10 rows of processed data with summary info
-data_sample <- data_wide %>%
-  head(10) %>%
-  mutate(Date = as.character(Date))
- 
-data_sample <- data_wide %>%
+ data_sample <- data_wide %>%
   head(10) %>%
   mutate(Date = as.character(Date))
  
 kbl(data_sample,
-    caption = "First 10 Rows of Processed ERCOT Ancillary Services Dataset (data\\_wide)",
+    booktabs = TRUE,
+    caption = "First 10 Rows of Processed ERCOT Ancillary Services Dataset",
     col.names = c("Date", "Hour Ending", "ECRS ($/MW)", "NSPIN ($/MW)",
                   "REGDN ($/MW)", "REGUP ($/MW)", "RRS ($/MW)"),
     digits = 2,
@@ -199,36 +196,39 @@ kbl(data_sample,
 #Variable-level summary across the five ancillary service MCPC columns
 #(training period: Dec 13, 2023 - Dec 31, 2025)
 ancillary_cols <- c("ECRS", "NSPIN", "REGDN", "REGUP", "RRS")
- 
+
 var_stats <- lapply(ancillary_cols, function(v) {
   x <- train_data[[v]]
   data.frame(
     Variable     = v,
     Description  = switch(v,
-                          ECRS  = "ERCOT Contingency Reserve Service MCPC",
-                          NSPIN = "Non-Spinning Reserve MCPC",
-                          REGDN = "Regulation Down MCPC",
-                          REGUP = "Regulation Up MCPC",
-                          RRS   = "Responsive Reserve Service MCPC"),
+                          ECRS  = "ERCOT Contingency Reserve Service",
+                          NSPIN = "Non-Spinning Reserve",
+                          REGDN = "Regulation Down",
+                          REGUP = "Regulation Up",
+                          RRS   = "Responsive Reserve Service"),
     Unit         = "$/MW",
     Observations = length(x),
     Mean         = round(mean(x,   na.rm = TRUE), 2),
     Median       = round(median(x, na.rm = TRUE), 2),
     SD           = round(sd(x,     na.rm = TRUE), 2),
     Min          = round(min(x,    na.rm = TRUE), 2),
-    Max          = round(max(x,    na.rm = TRUE), 2),
-    Source       = "ERCOT"
+    Max          = round(max(x,    na.rm = TRUE), 2)
   )
 })
- 
+
 summary_table <- do.call(rbind, var_stats)
 
-kable(summary_table,
-      caption = "Variable Summary: ERCOT Day-Ahead AS MCPC (Training Period, Dec 13, 2023 - Dec 31, 2025)",
-      align = c("l", "l", "c", "r", "r", "r", "r", "r", "r", "l"),
-      format.args = list(big.mark = ",")) %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
-                full_width = FALSE, position = "center")
+kbl(summary_table,
+    booktabs = TRUE,
+    caption = "Variable Summary: ERCOT Day-Ahead AS MCPC, Training Period (Dec 2023--Dec 2025)",
+    align = c("l", "l", "c", "r", "r", "r", "r", "r", "r"),
+    format.args = list(big.mark = ",")) %>%
+  kable_styling(full_width = FALSE, position = "center",
+                latex_options = c("hold_position", "striped", "scale_down"),
+                font_size = 9) %>%
+  footnote(general = "Source: ERCOT Public Website.",
+           general_title = "", footnote_as_chunk = TRUE)
 ```
 
 
@@ -311,7 +311,7 @@ After differencing, the slow ACF decay in the original series is gone, confirmin
 
 **Model Fit and Residual Diagnostics**
 
-```{r arima_setup, include=FALSE}
+```{r arima_setup, message=FALSE, warning=FALSE, include=FALSE}
 test_data <- read.csv("./Data/test_period_clean/data_test.csv")
 n_test <- nrow(test_data)
 ts_RRS_arima <- ts(train_data$RRS, frequency = 24, start = c(1, 1))
@@ -320,7 +320,7 @@ RRS_test  <- test_data
 time_index <- as.POSIXct(paste(test_data$Date, test_data$hourEnding), format = "%Y-%m-%d %H:%M")
 ```
 
-```{r fit_arima, echo=FALSE}
+```{r fit_arima, echo=FALSE, message=FALSE, warning=FALSE}
 ARIMA_RRS <- Arima(ts_RRS_arima,
                    order = c(1, 1, 1),
                    include.drift = FALSE)
@@ -332,7 +332,7 @@ print(ARIMA_RRS)
 checkresiduals(ARIMA_RRS)
 ```
 
-```{r ljung_box, echo=FALSE}
+```{r ljung_box, echo=FALSE, message=FALSE, warning=FALSE}
 lb_test <- Box.test(ARIMA_RRS$residuals, lag = 24, type = "Ljung-Box")
 print(lb_test)
 ```
@@ -362,7 +362,7 @@ print(ARIMA_Fourier_RRS)
 checkresiduals(ARIMA_Fourier_RRS)
 ```
 
-```{r fourier_ljung_box, echo=FALSE}
+```{r fourier_ljung_box, echo=FALSE, message=FALSE, warning=FALSE}
 lb_test_fourier <- Box.test(ARIMA_Fourier_RRS$residuals, lag = 24, type = "Ljung-Box")
 print(lb_test_fourier)
 ```
@@ -371,7 +371,7 @@ The AIC drops from 159532.4 to 159218.3, showing better overall fit. However, th
 
 **Accuracy on Test Period**
 
-```{r echo=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 #Load test data
 test_data <- read.csv("./Data/test_period_clean/data_test.csv")
 n_test <- nrow(test_data)
@@ -382,7 +382,7 @@ forecast_arima <- forecast(ARIMA_RRS, h = n_test)
 accuracy(forecast_arima, test_data$RRS)
 ```
 
-```{r}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 #ARIMA + Fourier forecast and accuracy
 fourier_test <- fourier(ts_RRS_arima, K=6, h=n_test)
 forecast_fourier <- forecast(ARIMA_Fourier_RRS, xreg=fourier_test, h=n_test)
@@ -395,7 +395,7 @@ The Fourier extension marginally improves training set RMSE (20.15 vs. 20.34 for
 
 **Fitting ARIMA + Fourier (grid search most suiatble K)**
 
-```{r echo=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 K_values <- 1:12
 
 results <- lapply(K_values, function(K) {
@@ -425,7 +425,7 @@ do.call(rbind, results)
 
 Now K=2 is performing the best, try auto arima since arima parameters may change with K.
 
-```{r}
+```{r echo=FALSE, message=TRUE, warning=TRUE}
 # Generate training regressors
 fourier_train <- fourier(ts_RRS_arima, K = 2)
 
@@ -448,7 +448,7 @@ accuracy(fc_auto, test_data$RRS)
 
 **Update the fourier model with best K and ARIMA parameters**
 
-```{r}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 #ARIMA + Fourier forecast and accuracy
 fourier_train <- fourier(ts_RRS_arima, K = 2)
 ARIMA_Fourier_RRS <- Arima(ts_RRS_arima,
@@ -467,21 +467,21 @@ We then built basic NNETAR, TBATS, and daily seasonal naive models to explore wh
 ### NNETAR
 Neural network model (NNETAR) is know for capture non-linear trends and forecast price picks.
 
-```{r include=FALSE}
+```{r message=FALSE, warning=FALSE, include=FALSE}
 ts_RRS_train <- ts(RRS_train$RRS,
                    frequency = 24)
 ts_RRS_test <- ts(RRS_test$RRS,
                    frequency = 24)
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 # fit model
 RRS_nnetar_01 <- nnetar(ts_RRS_train)
 # forecast
 RRS_nnetar_fc <- forecast(RRS_nnetar_01, h = 2352)
 ```
 From the plot above (with number of total days in x-axis), we can see the models fails to forecast future price spikes.
-```{r}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 # Accuracy
 accuracy(RRS_nnetar_fc, RRS_test$RRS)
 ```
@@ -489,7 +489,7 @@ The auto model generates m = 24, p (nonseasonal lag) = 28, and P (seasonal lag) 
 
 ### TBATS
 TBATS may capture multi-seasonality, though smooth irregular patterns and noises (which is inherently an important part in RRS price); we explored how it may perform in forecasting for our goal. Lambda is set automatically.
-```{r echo=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 mtts_RRS_train <- msts(
   RRS_train$RRS,
   seasonal.periods = c(24, 168)
@@ -506,14 +506,14 @@ RRS_tbats_01 <- tbats(mtts_RRS_train, lambda = "auto")
 RRS_tbats_fc <- forecast(RRS_tbats_01, h = 2352)
 ```
 
-```{r}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 # Accuracy
 accuracy(RRS_tbats_fc, RRS_test$RRS)
 ```
 
 ### Seasonal Naive as a baseline comparison
 Lastly, daily seasonal naive is built as a baseline, assuming the exact price for 2025 will repeat in 2026 for the same day.
-```{r}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 # Seasonal naive (daily pattern)
 RRS_snaive_fc <- snaive(ts_RRS_train, h = 2352)
 
@@ -527,7 +527,7 @@ accuracy(RRS_snaive_fc,  RRS_test$RRS)
 Unexpectedly, the seasonal naive model has a good RMSE on the test set compared to other more complex models, though higher RMSE for the training set. We will compare all models in later sections
 
 ## Result table
-```{r}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 # Extract test set metrics for each model
 get_metrics <- function(acc) {
   c(
@@ -571,7 +571,7 @@ write.csv(comparison_table, "model_comparison.csv", row.names = FALSE)
 The results table indicates that TBATS performs best overall, achieving the lowest MAE and MASE by effectively capturing complex seasonality and fluctuations. The daily seasonal naïve model also performs well surprisingly, suggesting that RRS prices have a strong and consistent daily cycle. ARIMA provides reasonable accuracy, while NNETAR is moderate, and ARIMA with Fourier terms performs worst, likely due to its inability to capture sharp, irregular price movements typical in ancillary service markets.
 
 ## Result plots
-```{r echo=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 plot(time_index, ts_RRS_test,
      type = "l",
      col = "black", lwd = 2,
@@ -591,7 +591,7 @@ legend("topright",
 
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 ylim_use <- c(0, quantile(ts_RRS_test, 0.99, na.rm = TRUE))
 
 plot(time_index, ts_RRS_test,
@@ -615,7 +615,7 @@ legend("topright",
 ```
 The two graphs above showed that over the full time horizon, RRS prices are generally low but exhibit a sharp spike in late January in 2026, reflecting a likely scarcity or system stress event in ERCOT. All models struggle to capture this extreme spike, with forecasts remaining relatively smooth and close to baseline levels. This highlights the difficulty of predicting rare, high-impact events in ancillary service markets, where price dynamics are largely stable but occasionally driven by sudden reliability needs.
 
-```{r echo=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 #Zoom in to see last week of January 
 # Define window (last week of Jan)
 start_date <- as.POSIXct("2026-01-25 00:00")
@@ -642,7 +642,7 @@ legend("topright",
 ```
 Focusing on the last week of January reveals more detail around the volatility period. The actual series shows rapid fluctuations and a pronounced spike, while the models track the general daily pattern but fail to match the magnitude of extreme movements. TBATS and ARIMA follow the underlying structure more closely, whereas the seasonal naïve model captures timing but underestimates variability, reinforcing that models can capture routine behavior but not sudden shocks.
 
-```{r}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 #Zoom in to see last week of January 
 # Define window (last week of Jan)
 start_date <- as.POSIXct("2026-01-25 00:00")
